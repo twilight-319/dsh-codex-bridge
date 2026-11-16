@@ -119,3 +119,12 @@ test('real MCP stdio and authenticated HTTP route submit, query and cancel a leg
  const cancelled=await call.promise;assert.equal(cancelled.result.isError,true)
  assert.ok(!stderr.includes(token))
 })
+test('timeout without a stopped observation remains reconciling',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'task-uncertain-'))
+ const manager=createTaskManager({store:createTaskStore(join(dir,'store')),executor:{async execute(i){i.onSession({sessionId:'s',baseline:0});return {sessionId:'s',text:'',stopReason:'timeout'}},async observe(){return {running:true}},async cancel(){},async dispose(){}}})
+ t.after(async()=>{await manager.dispose();await rm(dir,{recursive:true,force:true})})
+ const task=await manager.submit({goal:'uncertain',cwd:dir,idempotencyKey:'u'})
+ for(let i=0;i<100 && manager.get(task.taskId).state!=='RECONCILING';i++)await pause()
+ assert.equal(manager.get(task.taskId).state,'RECONCILING')
+ assert.throws(()=>manager.retry({taskId:task.taskId,idempotencyKey:'unsafe'}),{code:'task-busy'})
+})

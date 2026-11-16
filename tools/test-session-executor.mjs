@@ -133,6 +133,15 @@ if (!process.argv.includes('--child')) {
   assert.notEqual(fixed.activeRunId,integrated.activeRunId)
   assert.equal(manager.retry({taskId:integrated.taskId,idempotencyKey:'repair-1',goal:'fixed'}).activeRunId,repaired.activeRunId)
   await manager.dispose()
+  nextMode='questions'
+  const cancelRelay=createQuestionRelay({ctx,isBridgeSession:id=>sessions.has(id)})
+  const cancelExecutor=createExecutor({ctx,relay:cancelRelay})
+  const awaiting=await cancelExecutor.execute({task:'cancel question'})
+  assert.equal(awaiting.stopReason,'needs-input')
+  await cancelExecutor.cancel(awaiting.sessionId)
+  sessions.get(awaiting.sessionId).mode='done'
+  assert.equal((await cancelExecutor.execute({task:'after cancellation',sessionId:awaiting.sessionId})).text,'after cancellation')
+  await cancelExecutor.dispose();cancelRelay.dispose()
   clearInterval(keepAlive)
   console.log('PASS: cursor isolation, lock, strict reuse, two questions, stale requestId, timeout cleanup and dispose.')
 }
