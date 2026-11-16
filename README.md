@@ -2,6 +2,12 @@
 
 Beta 1 候选实现，保留 1.x 三个 MCP 工具。新增持久化任务接口、幂等、取消与对账、验证证据，以及显式驱动的执行 → 验证 → Codex 审查流程。Windows DSH 真机联调仍是发布门槛，不能用离线测试代替。
 
+## 当前修复候选 2.0.0-beta.1.1
+
+原 Beta 1 候选真机验收为 NO-GO。此候选修复 BETA1-01/02/03：有界宿主观察信号、派发后异常的停止证据判定、待答预算取消与资源约束，并隔离旧候选可能提前标记 FAILED 的记录。复验前仍不具备发布通过结论，详见 [复验清单](docs/BETA1_RETEST.md)。
+
+新任务总预算包含人类等待，等待时仍计时；过期会请求取消，未确认停止时保持 RECONCILING。旧三工具的原生提问等待沿用问题 TTL，合法 dsh_answer 获得新的执行预算。观察错误保留在 run.observationError，不再静默折叠为 null。
+
 ## 任务接口
 
 - `dsh_task_submit`：`goal`、`idempotencyKey` 必填；可传 `cwd`、`plan`、`acceptance`、`verificationProfile`、`review`、`timeoutMs`。

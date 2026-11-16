@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-codex-bridge",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-beta.1.1",
   "private": true,
   "description": "Codex plans, DSH executes: native-session workbench, parallel tasks and question relay.",
   "type": "module",
@@ -30,6 +30,7 @@
     "cordis.patch.yml",
     "icon.svg",
     "README.md",
+    "docs/*.md",
     "LICENSE",
     "locale/*.json",
     "tools/test-*.mjs"
