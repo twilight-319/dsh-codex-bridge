@@ -225,7 +225,7 @@ const TOOLS = [
     description: [
       '让 DSH（DeepSeek Harness）本机实际执行一个任务，并返回它的最终回答。',
       'DSH 跑的是一个真实会话：能读写工作目录里的文件、执行命令，动作发生在用户本机。',
-      '适合「需要真正动手/读仓库」的步骤；只在需要执行时才调用，规划与决策请自己做。',
+      '仅适合短小步骤，旧同步契约最多10分钟且到期会取消。多阶段、构建或复杂仓库任务请用 dsh_task_submit（后台预算默认30分钟）并用 dsh_task_wait 查询，不要反复重发。',
       '返回的是 DSH 的最终 assistant 文本；失败时以 isError 返回可读原因（超时、连接失败、401 等）。',
       '默认每次新建会话；传 sessionId 可复用同一 DSH 会话继续追问（保留上下文）。',
       '如果返回 needsInput=true，说明 DSH 在等待用户回答：把 question 原样呈现给用户，然后调用 dsh_answer 回答同一会话。',
@@ -512,7 +512,7 @@ function describeNetworkError(error) {
     case 'EAI_AGAIN':
       return `${base}\n提示：主机名无法解析，检查 --url 是否写对。`;
     case 'DSH_TIMEOUT':
-      return `${base}\n提示：DSH 侧可能仍在执行该任务；可调大 timeoutMs 或缩短任务。`;
+      return `${base}\n提示：DSH 侧结果可能未知；先查询原任务/会话，不要重复提交。旧同步工具最多10分钟，长任务请改用 dsh_task_submit + wait。`;
     case 'ECONNRESET':
     case 'EPIPE':
     case 'DSH_ABORTED':
@@ -579,12 +579,36 @@ async function requestDsh({ route, method, body, timeoutMs }) {
 }
 
 const taskCalls = new Map();
+const field = (type, description) => ({type, ...(description ? {description}: {})});
+const taskSchemas = {
+  submit: [{goal:field('string'),plan:field('string'),acceptance:{type:'array',items:{type:'string'}},cwd:field('string'),idempotencyKey:field('string'),timeoutMs:field('integer','后台总预算，默认30分钟，宿主可配置，硬上限2小时；不是本次HTTP等待时间。'),verificationProfile:field('string'),review:field('boolean')},['goal','idempotencyKey']],
+  get: [{taskId:field('string')},['taskId']],
+  list: [{cursor:field('integer'),limit:field('integer')},[]],
+  events: [{taskId:field('string'),cursor:field('integer')},['taskId']],
+  wait: [{taskId:field('string'),runId:field('string'),afterRevision:field('integer'),waitMs:field('integer','0~25000，默认10000；到期只返回快照，不取消后台任务。')},['taskId']],
+  answer: [{taskId:field('string'),runId:field('string'),requestId:field('string'),answers:{type:'array',items:{type:'object'}}},['taskId','runId','requestId','answers']],
+  cancel: [{taskId:field('string')},['taskId']],
+  reconcile: [{taskId:field('string')},['taskId']],
+  retry: [{taskId:field('string'),idempotencyKey:field('string'),goal:field('string')},['taskId','idempotencyKey']],
+  maintenance_status: [{},[]], maintenance_begin: [{},[]], maintenance_end: [{token:field('string')},['token']],
+};
+const taskDescriptions = {
+  submit:'多阶段修改、构建、跨模块Java任务优先用此异步提交。立即返回taskId/runId，之后用dsh_task_wait/get/events查询。幂等键重用不会重派；拆分可验收阶段，不要把整个项目塞进旧同步10分钟工具。',
+  wait:'等待任务变化或短等待到期。只结束本次等待，不取消后台执行；根据返回revision继续等待。',
+  answer:'回答当前问题后立即返回任务快照；后台继续同Run，用wait查询，不重发原任务。',
+  maintenance_begin:'维护前关闭新任务准入并排空既有任务。忙返回409和维护凭据，保持draining；绝不取消任务。只有ready才可更新。',
+  maintenance_end:'凭维护token恢复任务准入；不要在更新中途释放。',
+};
 for(const action of taskActions) {
-  TOOLS.push({name:'dsh_task_'+action,description:'持久化任务 '+action+'；submit 幂等提交，get/list/events 查询，cancel 请求停止，reconcile 对账并补发已请求的取消（不重派任务），answer 回答本次提问。',inputSchema:{type:'object',properties: action==='submit' ? {goal:{type:'string'},plan:{type:'string'},acceptance:{type:'array',items:{type:'string'}},cwd:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'},verificationProfile:{type:'string'},review:{type:'boolean'}} : {taskId:{type:'string'},idempotencyKey:{type:'string'},goal:{type:'string'},runId:{type:'string'},requestId:{type:'string'},answers:{type:'array',items:{type:'object'}},cursor:{type:'integer'},limit:{type:'integer'}},required:action==='submit'?['goal','idempotencyKey']:action==='list'?[]:['taskId'],additionalProperties:false}});
+  const [properties,required]=taskSchemas[action];
+  TOOLS.push({name:'dsh_task_'+action,description:taskDescriptions[action] ?? ('持久化任务 '+action+'；取消必须等待停止证据，对账不重派原任务。'),inputSchema:{type:'object',properties,required,additionalProperties:false}});
 }
 async function callTask(action,args) {
-  const {response,parsed}=await requestDsh({route:TASK_PATH,method:'POST',body:{...requireObject(args??{},'arguments'),action},timeoutMs:action==='answer'?CONFIG.timeoutMs+10000:['cancel','reconcile'].includes(action)?25000:10000});
-  if(response.status<200||response.status>=300||parsed.json?.ok!==true||!Object.hasOwn(parsed.json,'value'))return errorResult(failureDetail(parsed.json,'任务请求失败'));
+  const input=requireObject(args??{},'arguments');
+  if(action==='wait' && input.waitMs !== undefined && (!Number.isInteger(input.waitMs)||input.waitMs<0||input.waitMs>25000))throw new InvalidParams('waitMs 必须是0~25000整数');
+  const transportMs=action==='wait'?(input.waitMs??10000)+10000:['cancel','reconcile'].includes(action)?25000:10000;
+  const {response,parsed}=await requestDsh({route:TASK_PATH,method:'POST',body:{...input,action},timeoutMs:transportMs});
+  if(response.status<200||response.status>=300||parsed.json?.ok!==true||!Object.hasOwn(parsed.json,'value'))return errorResult(failureDetail(parsed.json,'任务请求失败')+(parsed.json?.maintenance?'\n'+JSON.stringify({maintenance:parsed.json.maintenance}):''));
   return toTextResult(JSON.stringify(parsed.json.value));
 }
 
@@ -852,8 +876,9 @@ async function handleRequest(message) {
         throw new InvalidParams('tools/call 缺少 name（必须是字符串）');
       }
       if(name.startsWith('dsh_task_') && taskActions.includes(name.slice(9))) {
-        if(name==='dsh_task_answer')taskCalls.set(id,{taskId:p.arguments?.taskId});
-        try {writeResult(id,await callTask(name.slice(9),p.arguments));} finally {taskCalls.delete(id)} return;
+        // Async answer/wait cancellation ends the client request only. Explicit
+        // dsh_task_cancel is the sole way to cancel an admitted async task.
+        writeResult(id,await callTask(name.slice(9),p.arguments)); return;
       }
       if (name === TOOL_EXECUTE) {
         const clientCallId=taskUUID();taskCalls.set(id,{clientCallId});

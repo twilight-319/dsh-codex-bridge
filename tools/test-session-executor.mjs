@@ -110,6 +110,12 @@ if (!process.argv.includes('--child')) {
   const beforeApprovalCancel = cancels
   assert.equal((await approvalExecutor.execute({ task: 'approval' })).stopReason, 'input-required')
   assert.equal(readSessions()[0].state, 'input-required')
+  assert.equal(approvalExecutor.activity().approvals,1)
+  const approvalId=readSessions()[0].sessionId
+  await approvalExecutor.cancel(approvalId)
+  assert.equal(approvalExecutor.activity().approvals,1, 'cancel acknowledgement alone is not stopped evidence')
+  await approvalExecutor.observe(approvalId,0)
+  assert.equal(approvalExecutor.activity().approvals,0, 'confirmed stopped approval cleans maintenance activity')
   await approvalExecutor.dispose(); assert.ok(cancels > beforeApprovalCancel)
   // Exercise the actual session adapter through the task manager in the isolated child HOME.
   const {createTaskManager}=await import('../lib/task-manager.js')

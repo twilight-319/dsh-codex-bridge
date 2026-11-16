@@ -143,6 +143,23 @@ test('malformed/failed HTTP successes never become MCP success for any tool', as
   }
 });
 
+test('async wait cancellation is observer-only and tool schemas distinguish budgets', async(t)=>{
+  const f=await fixture(t); const bodies=[];
+  const mock=await f.mock('tasks',(req,res)=>{const chunks=[]; // fixture already consumed request, inspect captured body below
+    res.setHeader('content-type','application/json');
+    setTimeout(()=>res.end(JSON.stringify({ok:true,value:{reason:'wait-expired',task:{taskId:'t',state:'RUNNING'}}})),50);
+  });f.publish(mock.origin);const api=await f.client();
+  const tools=(await api.request('tools/list',{})).result.tools;
+  assert.ok(tools.find(t=>t.name==='dsh_task_wait').inputSchema.properties.waitMs);
+  assert.ok(tools.find(t=>t.name==='dsh_task_submit').description.includes('异步'));
+  const waiting=api.request('tools/call',{name:'dsh_task_wait',arguments:{taskId:'t',waitMs:10}});
+  api.child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/cancelled',params:{requestId:5}})+'\n');
+  const result=await waiting;assert.notEqual(result.result.isError,true);
+  assert.equal(mock.requests.length,1);assert.equal(JSON.parse(mock.requests[0].body).action,'wait');
+  const answer=await api.request('tools/call',{name:'dsh_task_answer',arguments:{taskId:'t',runId:'r',requestId:'q',answers:[]}});assert.notEqual(answer.result.isError,true);
+  assert.equal(mock.requests.length,2);assert.equal(JSON.parse(mock.requests[1].body).action,'answer');
+});
+
 test('same initialized MCP process follows discovery changes for GET and POST', async (t) => {
   const f = await fixture(t);
   const a = await f.mock('first');

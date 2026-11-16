@@ -61,7 +61,7 @@ test('invalid answer preserves pending question; valid answer continues same run
  assert.equal(f.manager.get(task.taskId).state,'WAITING_INPUT')
  await f.manager.answer({taskId:task.taskId,runId:task.activeRunId,requestId:'q1',answers:[{id:'q',selected:['A']}]})
  assert.equal(f.manager.get(task.taskId).activeRunId,task.activeRunId)
- assert.equal(f.manager.get(task.taskId).state,'REVIEW_REQUIRED')
+ assert.equal((await f.settled(task.taskId)).state,'REVIEW_REQUIRED')
 })
 test('store locks, checksums, incomplete tails and restart uncertainty',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'task-journal-'))
