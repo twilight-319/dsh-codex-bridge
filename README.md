@@ -2,7 +2,7 @@
 
 工程收尾候选 **2.0.0-rc.2**，发布仍为 **NO-GO，等待固定 RC 的真机复验**。新增任务工作台、只读 doctor、旧记录导入、备份恢复与发布证据检查。左侧 Codex → **任务** 即可进入。
 
-RC 位于 [`feat/task-core-beta1` / PR #1](https://github.com/twilight-319/dsh-codex-bridge/pull/1)，`main` 仍为 1.x。复验时使用 PR 当前完整 40 位提交 SHA，按下方 Git spec 固定安装；直接安装默认仓库地址不会获得此 RC。升级前先结束或核对在途任务，并按发布验收文档备份。
+`main` 当前为 **2.0.0-rc.2 集成候选**，合并远端任务工作台/诊断/导入与本地长任务/维护/调优能力；不是正式 2.0.0 稳定发布。复验或安装时固定完整 40 位提交 SHA。原收尾开发记录见 [`feat/task-core-beta1` / PR #1](https://github.com/twilight-319/dsh-codex-bridge/pull/1)。升级前使用 maintenance begin 排空，不要重载在途任务，并按发布验收文档备份。
 
 - [2.0 使用 升级与发布验收](docs/V2_RELEASE.md)
 - [Beta 1 阻断与复验记录](docs/BETA1_RETEST.md)
