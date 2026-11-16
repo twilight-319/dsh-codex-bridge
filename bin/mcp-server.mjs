@@ -580,8 +580,9 @@ async function requestDsh({ route, method, body, timeoutMs }) {
 
 const taskCalls = new Map();
 const field = (type, description) => ({type, ...(description ? {description}: {})});
+const tuningSchema={type:'object',properties:{modelMode:field('string','manual或auto；auto与显式provider/model冲突'),effortMode:field('string','manual或auto；auto与显式reasoningEffort冲突'),timeoutMode:field('string','manual或auto；auto与显式timeoutMs冲突'),taskClass:field('string','历史分组的小写类别ID，如backend-change'),objective:field('string','quality/speed/balanced；根据用户模型池标签选取，不猜测模型名称')} ,additionalProperties:false};
 const taskSchemas = {
-  submit: [{goal:field('string'),plan:field('string'),acceptance:{type:'array',items:{type:'string'}},cwd:field('string'),idempotencyKey:field('string'),timeoutMs:field('integer','后台总预算，默认30分钟，宿主可配置，硬上限2小时；不是本次HTTP等待时间。'),verificationProfile:field('string'),review:field('boolean')},['goal','idempotencyKey']],
+  submit: [{provider:field('string','与model成对；必须属于用户授权候选'),model:field('string'),reasoningEffort:field('string','精确档位ID，如max；仅用户允许且模型支持时可选，不能总是省略而声称自动调优'),reason:field('string','解释模型/档位选择，最多500字符'),tuning:tuningSchema,goal:field('string'),plan:field('string'),acceptance:{type:'array',items:{type:'string'}},cwd:field('string'),idempotencyKey:field('string'),timeoutMs:field('integer','后台总预算，默认30分钟，宿主可配置，硬上限2小时；不是本次HTTP等待时间。'),verificationProfile:field('string'),review:field('boolean')},['goal','idempotencyKey']],
   get: [{taskId:field('string')},['taskId']],
   list: [{cursor:field('integer'),limit:field('integer')},[]],
   events: [{taskId:field('string'),cursor:field('integer')},['taskId']],
@@ -592,8 +593,11 @@ const taskSchemas = {
   retry: [{taskId:field('string'),idempotencyKey:field('string'),goal:field('string')},['taskId','idempotencyKey']],
   maintenance_status: [{},[]], maintenance_begin: [{},[]], maintenance_end: [{token:field('string')},['token']],
 };
+taskSchemas.preview=[{...taskSchemas.submit[0]},[]];
+delete taskSchemas.preview[0].idempotencyKey;
 const taskDescriptions = {
-  submit:'多阶段修改、构建、跨模块Java任务优先用此异步提交。立即返回taskId/runId，之后用dsh_task_wait/get/events查询。幂等键重用不会重派；拆分可验收阶段，不要把整个项目塞进旧同步10分钟工具。',
+  preview:'只读调优预览，不创建Task/会话，不预留预算；查看授权模型、档位选择与历史依据，提交时会重新解析。',
+  submit:'多阶段修改、构建、跨模块Java任务优先用此异步提交。立即返回taskId/runId，之后用dsh_task_wait/get/events查询。可通过provider/model、reasoningEffort/reason、timeoutMs显式选参，或tuning各项auto在授权范围内选择；返回冻结选择和依据。幂等键重用不会重派；拆分可验收阶段，不要把整个项目塞进旧同步10分钟工具。',
   wait:'等待任务变化或短等待到期。只结束本次等待，不取消后台执行；根据返回revision继续等待。',
   answer:'回答当前问题后立即返回任务快照；后台继续同Run，用wait查询，不重发原任务。',
   maintenance_begin:'维护前关闭新任务准入并排空既有任务。忙返回409和维护凭据，保持draining；绝不取消任务。只有ready才可更新。',

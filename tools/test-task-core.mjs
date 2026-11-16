@@ -126,5 +126,5 @@ test('timeout without a stopped observation remains reconciling',async t=>{
  const task=await manager.submit({goal:'uncertain',cwd:dir,idempotencyKey:'u'})
  for(let i=0;i<100 && manager.get(task.taskId).state!=='RECONCILING';i++)await pause()
  assert.equal(manager.get(task.taskId).state,'RECONCILING')
- assert.throws(()=>manager.retry({taskId:task.taskId,idempotencyKey:'unsafe'}),{code:'task-busy'})
+ await assert.rejects(manager.retry({taskId:task.taskId,idempotencyKey:'unsafe'}),{code:'task-busy'})
 })

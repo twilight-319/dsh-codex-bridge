@@ -32,7 +32,7 @@ test('maintenance closes admission before drain, blocks retry/legacy, never canc
  const f=await fixture(t);const a=await f.submit();await until(()=>f.executions===1);const b=await f.submit();let token
  try{f.manager.maintenanceBegin();assert.fail('must be busy')}catch(e){assert.equal(e.code,'maintenance-busy');token=e.maintenance.token;assert.equal(e.maintenance.ready,false)}
  assert.equal(f.cancels,0);await assert.rejects(f.submit(),{code:'maintenance-draining'});await assert.rejects(f.manager.legacyExecute({task:'legacy',cwd:f.dir}),{code:'maintenance-draining'})
- f.complete();await until(()=>f.executions===2);assert.equal(f.cancels,0);f.complete();await until(()=>f.manager.get(b.taskId).state==='REVIEW_REQUIRED');assert.throws(()=>f.manager.retry({taskId:a.taskId,idempotencyKey:'r'}),{code:'maintenance-draining'})
+ f.complete();await until(()=>f.executions===2);assert.equal(f.cancels,0);f.complete();await until(()=>f.manager.get(b.taskId).state==='REVIEW_REQUIRED');await assert.rejects(f.manager.retry({taskId:a.taskId,idempotencyKey:'r'}),{code:'maintenance-draining'})
  const ready=f.manager.maintenanceBegin();assert.equal(ready.ready,true);assert.equal(ready.token,token);assert.throws(()=>f.manager.maintenanceEnd({token:'wrong'}));assert.equal(f.manager.maintenanceEnd({token}).draining,false)
 })
 test('async answer returns before continuation completes while legacy waits',async t=>{

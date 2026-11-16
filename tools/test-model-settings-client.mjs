@@ -51,6 +51,7 @@ const sandbox = {
         const body = JSON.parse(options.body)
         const saved = {
           schemaVersion: 1, revision: 4, modelMode: body.modelMode, effortMode: body.effortMode, permissionMode: body.permissionMode, ...(body.permissionMode === 'full-access' ? {} : {}),
+          ...(body.modelMode === 'pool' ? {models:body.models} : {}),
           ...(body.modelMode === 'pinned' ? { provider: body.provider, model: body.model } : {}),
           ...(body.effortMode === 'fixed' ? { fixedEffort: body.fixedEffort } : {}),
           ...(body.effortMode === 'adaptive' ? { allowedEfforts: body.allowedEfforts, defaultEffort: body.defaultEffort } : {}),
@@ -142,6 +143,15 @@ assert.deepEqual(posted[0].body, {
 view.tree = editorRender()
 assert.ok(textOf(view.tree).includes('已保存'))
 
+// Exercise the actual pool form, including the second route and isolated efforts.
+radios().filter(node=>node.props.name==='modelMode')[2].props.onChange();view.tree=editorRender()
+assert.ok(textOf(view.tree).includes('授权模型 1'))
+byText(view.tree,'button','添加第二个授权模型').props.onClick();view.tree=editorRender()
+walk(view.tree).find(n=>n.props['aria-label']==='池模型 1').props.onChange({target:{value:'deepseek-lite'}});view.tree=editorRender()
+byText(view.tree,'button','保存执行模型设置').props.onClick();await wait();view.tree=editorRender()
+const poolPost=requests.filter(r=>r.method==='POST').at(-1).body
+assert.equal(poolPost.modelMode,'pool');assert.equal(poolPost.models.length,2);assert.equal(poolPost.models[1].model,'deepseek-lite');assert.equal(poolPost.models[1].objective.autoAllowed,false);assert.equal(poolPost.effortMode,undefined)
+assert.ok(textOf(view.tree).includes('授权模型 2'))
 saveConflict = true
 byText(view.tree, 'button', '保存执行模型设置').props.onClick()
 await wait()

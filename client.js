@@ -775,6 +775,7 @@ window.__ModuleLoader__.load({
       }
       function toDraft(policy) {
         return {
+          models: policy.models ? JSON.parse(JSON.stringify(policy.models)) : [],
           modelMode: policy.modelMode || 'follow-default',
           provider: policy.provider || '',
           model: policy.model || '',
@@ -819,7 +820,7 @@ window.__ModuleLoader__.load({
       // will use: follow-default reads the catalog default, not the empty draft.
       function routeOf(catalog, value) {
         if (!catalog) return { provider: '', model: '' }
-        return value.modelMode === 'follow-default'
+        return value.modelMode === 'pool' ? (value.models[0]||{provider:'',model:''}) : value.modelMode === 'follow-default'
           ? catalog.default
           : { provider: value.provider, model: value.model }
       }
@@ -858,6 +859,7 @@ window.__ModuleLoader__.load({
           body.allowedEfforts = draft.allowedEfforts
           body.defaultEffort = draft.defaultEffort
         }
+        if(draft.modelMode==='pool'){delete body.effortMode;delete body.fixedEffort;delete body.allowedEfforts;delete body.defaultEffort;body.models=draft.models}
         fetch(POLICY_API, {
           method: 'POST',
           credentials: 'same-origin',
@@ -889,12 +891,33 @@ window.__ModuleLoader__.load({
                 patch.allowedEfforts = []
                 patch.defaultEffort = ''
               }
+              if(value==='pool' && !draft.models.length){var route=draft.modelMode==='pinned'?draft:state.catalog.default;patch.models=[{provider:route.provider,model:route.model,effortMode:draft.effortMode, ...(draft.effortMode==='adaptive'?{allowedEfforts:draft.allowedEfforts.slice(),defaultEffort:draft.defaultEffort}:draft.effortMode==='fixed'?{fixedEffort:draft.fixedEffort}:{}),objective:{priority:'balanced',autoAllowed:true}}]}
               update(patch)
               return
             }
             update({ effortMode: value, fixedEffort: '', allowedEfforts: [], defaultEffort: '' })
           } }),
           h('span', null, h('strong', null, label), hint ? h('small', { style: { display: 'block', opacity: 0.72, marginTop: '2px' } }, hint) : null))
+      }
+      function poolEditor() {
+        function patchItem(index,patch){var rows=draft.models.slice();rows[index]=Object.assign({},rows[index],patch);update({models:rows})}
+        return h('div',null,draft.models.map(function(item,index){
+          var entry=modelsOf(item.provider).filter(function(m){return m.id===item.model})[0]
+          var options=(entry&&entry.reasoning&&entry.reasoning.efforts)||[]
+          function resetRoute(provider,model){patchItem(index,{provider:provider,model:model,effortMode:'inherit',allowedEfforts:undefined,defaultEffort:undefined,fixedEffort:undefined,objective:{priority:item.objective.priority,autoAllowed:item.objective.autoAllowed}})}
+          return h('fieldset',{key:index,style:{margin:'10px 0',padding:'12px',border:'1px solid var(--dsw-alias-border-default)'}},h('legend',null,'授权模型 '+(index+1)),
+            h('select',{'aria-label':'池模型源 '+index,value:item.provider,onChange:function(e){var first=modelsOf(e.target.value)[0];resetRoute(e.target.value,first?first.id:'')}},state.catalog.groups.map(function(g){return h('option',{key:g.id,value:g.id},g.name)})),
+            h('select',{'aria-label':'池模型 '+index,value:item.model,onChange:function(e){resetRoute(item.provider,e.target.value)}},modelsOf(item.provider).map(function(m){return h('option',{key:m.id,value:m.id},m.name+' · '+m.id)})),
+            h('select',{'aria-label':'池强度模式 '+index,value:item.effortMode,onChange:function(e){var mode=e.target.value;patchItem(index,{effortMode:mode,allowedEfforts:mode==='adaptive'&&options.length?[options[0].id]:undefined,defaultEffort:mode==='adaptive'&&options.length?options[0].id:undefined,fixedEffort:mode==='fixed'&&options.length?options[0].id:undefined,objective:{priority:item.objective.priority,autoAllowed:item.objective.autoAllowed}})}},h('option',{value:'inherit'},'继承'),options.length?h('option',{value:'fixed'},'固定'):null,options.length?h('option',{value:'adaptive'},'允许任务选择'):null),
+            item.effortMode==='fixed'?h('select',{'aria-label':'池固定强度 '+index,value:item.fixedEffort,onChange:function(e){patchItem(index,{fixedEffort:e.target.value})}},options.map(function(e){return h('option',{key:e.id,value:e.id},e.name)})):null,
+            item.effortMode==='adaptive'?h('div',null,options.map(function(e){var allowed=item.allowedEfforts||[];return h('label',{key:e.id},h('input',{type:'checkbox','aria-label':'池允许 '+index+' '+e.id,checked:allowed.indexOf(e.id)>=0,onChange:function(){var list=allowed.indexOf(e.id)>=0?allowed.filter(function(v){return v!==e.id}):allowed.concat([e.id]);patchItem(index,{allowedEfforts:list,defaultEffort:list.indexOf(item.defaultEffort)>=0?item.defaultEffort:list[0],objective:{priority:item.objective.priority,autoAllowed:item.objective.autoAllowed}})}}),e.id)}),
+            h('label',null,'默认 ',h('select',{'aria-label':'池默认强度 '+index,value:item.defaultEffort||'',onChange:function(e){patchItem(index,{defaultEffort:e.target.value})}},(item.allowedEfforts||[]).map(function(id){return h('option',{key:id,value:id},id)}))),
+            ['quality','speed','balanced'].map(function(goal){return h('label',{key:goal},goal+'偏好 ',h('select',{'aria-label':'池自动强度 '+index+' '+goal,value:(item.objective.efforts||{})[goal]||'',onChange:function(e){var efforts=Object.assign({},item.objective.efforts);if(e.target.value)efforts[goal]=e.target.value;else delete efforts[goal];patchItem(index,{objective:Object.assign({},item.objective,{efforts:efforts})})}},h('option',{value:''},'默认回退'),(item.allowedEfforts||[]).map(function(id){return h('option',{key:id,value:id},id)})))})):null,
+            h('label',null,'用途 ',h('select',{'aria-label':'池用途 '+index,value:item.objective.priority,onChange:function(e){patchItem(index,{objective:Object.assign({},item.objective,{priority:e.target.value})})}},['balanced','quality','speed'].map(function(v){return h('option',{key:v,value:v},v)}))),
+            h('label',null,h('input',{type:'checkbox','aria-label':'池自动选择 '+index,checked:item.objective.autoAllowed,onChange:function(e){patchItem(index,{objective:Object.assign({},item.objective,{autoAllowed:e.target.checked})})}}),'允许自动选择'),
+            draft.models.length>1?h('button',{type:'button',onClick:function(){update({models:draft.models.filter(function(_,i){return i!==index})})}},'移除此模型'):null)
+        }),draft.models.length<2?h('button',{type:'button',onClick:function(){var group=state.catalog.groups[0],first=group&&group.models[0];if(first)update({models:draft.models.concat([{provider:group.id,model:first.id,effortMode:'inherit',objective:{priority:'balanced',autoAllowed:false}}])})}},'添加第二个授权模型'):null,
+        h('p',null,'最多两个精确模型。用途与自动档位是你的授权偏好，不是历史学习结论；不自动故障换模。'))
       }
       var view
       if (error && !state) {
@@ -925,6 +948,8 @@ window.__ModuleLoader__.load({
             h('h3', null, '1. 执行模型'),
             radio('modelMode', 'follow-default', '跟随 DSH 默认模型', '每次新执行开始前读取当时的 DSH 默认：' + catalog.default.provider + '/' + catalog.default.model),
             radio('modelMode', 'pinned', '指定桥专用模型', '只用于 Codex 通过本桥发起的执行，不影响其他 DSH 会话'),
+            radio('modelMode','pool','授权模型池（1～2个）','Codex与策略仅在池内选择，各模型独立限制档位'),
+            draft.modelMode==='pool'?poolEditor():null,
             draft.modelMode === 'pinned' ? h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', margin: '8px 0 0 26px' } },
               h('select', { style: policyInputStyle, 'aria-label': '模型源', value: draft.provider, onChange: function (event) {
                 var provider = event.target.value
@@ -935,7 +960,7 @@ window.__ModuleLoader__.load({
                 update({ model: event.target.value, fixedEffort: '', allowedEfforts: [], defaultEffort: '' })
               } }, h('option', { value: '' }, '选择模型'), models)) : null,
             catalog.failures.length ? h('p', { style: { opacity: 0.7, margin: '8px 0 0' } }, '部分模型源目录当前不可用：' + catalog.failures.map(function (item) { return item.name }).join('、')) : null),
-          h('section', { style: { marginTop: '18px' } },
+          draft.modelMode!=='pool'?h('section', { style: { marginTop: '18px' } },
             h('h3', null, '2. 思考强度'),
             radio('effortMode', 'inherit', '继承（不额外指定）', '跟随该模型/DSH 默认的强度，不改写'),
             radio('effortMode', 'fixed', '固定一个档位', '每次执行都用同一个强度，Codex 不能改', !supportsEffort),
@@ -956,7 +981,7 @@ window.__ModuleLoader__.load({
               })),
               h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '8px' } }, 'Codex 未指定时使用',
                 h('select', { style: policyInputStyle, value: draft.defaultEffort, disabled: !draft.allowedEfforts.length, onChange: function (event) { update({ defaultEffort: event.target.value }) } },
-                  h('option', { value: '' }, '选择默认档位'), draft.allowedEfforts.map(function (id) { return h('option', { key: id, value: id }, id) })))) : null),
+                  h('option', { value: '' }, '选择默认档位'), draft.allowedEfforts.map(function (id) { return h('option', { key: id, value: id }, id) })))) : null):null,
           h('section', { style: { marginTop: '18px' } },
             h('h3', null, '3. 执行权限'),
             permissionOption('full-access', '完全权限（需确认）', '执行会话切换到完全权限，不弹审批；允许工作区外读写与不受限命令，仅对可信任务开启'),

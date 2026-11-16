@@ -1,3 +1,4 @@
+import { tuningConfig } from './lib/task-tuning.js'
 import { taskBudgets } from './lib/task-budget.js'
 import { createTaskStore } from './lib/task-store.js'
 import { createTaskManager } from './lib/task-manager.js'
@@ -59,6 +60,7 @@ const DEFAULTS = {
   reversePreset: 'standard',
   page: true,
   verificationProfiles: {},
+  tuningHistory: {},
   taskDefaultTimeoutMs: 1800000,
   taskMaxTimeoutMs: 7200000,
 }
@@ -279,6 +281,7 @@ function normalizeConfig(config) {
     throw new Error('codex-bridge: timeoutMs must be between 5000 and 900000')
   }
   Object.assign(resolved, taskBudgets(resolved))
+  resolved.tuningHistory=tuningConfig(resolved.tuningHistory)
   resolved.maxConcurrency = Math.max(1, Number(resolved.maxConcurrency) || 2)
   resolved.maxContextChars = Math.max(10_000, Number(resolved.maxContextChars) || 120_000)
   resolved.maxSessions = Math.min(8, Math.max(1, Number(resolved.maxSessions) || 3))
@@ -384,6 +387,7 @@ export function apply(ctx, config = {}) {
       store:createTaskStore(join(homedir(),'.dsh','codex-bridge','tasks-v2')),
       executor:getExecutor(), profiles:resolved.verificationProfiles,
       taskDefaultTimeoutMs: resolved.taskDefaultTimeoutMs, taskMaxTimeoutMs: resolved.taskMaxTimeoutMs,
+      executionPolicy, tuningHistory:resolved.tuningHistory,
       verificationService:(()=>{try{return typeof ctx.get==='function' ? ctx.get('bridgeVerification') : ctx.bridgeVerification}catch{return null}})(),
       reviewer: async (task,signal) => {
         const result=await runner.consult({prompt:buildPrompt('review',{context:JSON.stringify({goal:task.goal,acceptance:task.acceptance,before:task.run.before,verification:task.run.verification}).slice(0,120000),diff:task.run.after?.diff ?? ''},{cwd:task.cwd,files:'',diff:task.run.after?.diff ?? ''}),schema:SCHEMAS.review,cwd:task.cwd,signal,kind:'review',sessionKey:'task-review|'+task.taskId})
@@ -422,7 +426,7 @@ export function apply(ctx, config = {}) {
               const policy = state.policy
               const route = policy.modelMode === 'follow-default'
                 ? state.catalog.default
-                : { provider: policy.provider, model: policy.model }
+                : policy.modelMode==='pool' ? policy.models[0] : { provider: policy.provider, model: policy.model }
               const entry = state.catalog.groups
                 .find((group) => group.id === route.provider)?.models
                 .find((model) => model.id === route.model)
@@ -438,6 +442,7 @@ export function apply(ctx, config = {}) {
                 fixedEffort: policy.fixedEffort ?? null,
                 allowedEfforts: policy.allowedEfforts ?? null,
                 policyDefaultEffort: policy.defaultEffort ?? null,
+                authorizedModels: policy.modelMode==='pool'?policy.models.map(m=>({...m,supportedEfforts:(state.catalog.groups.find(g=>g.id===m.provider)?.models.find(v=>v.id===m.model)?.reasoning?.efforts??[]).map(e=>e.id)})):null,
               }
             },
           },

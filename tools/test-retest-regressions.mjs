@@ -114,7 +114,7 @@ if (!process.argv.includes('--child')) {
   const f=await seeded(t,{observe:async()=>observation('aborted',true)})
   const current=await f.manager.reconcile({taskId:f.taskId})
   assert.equal(current.state,'RECONCILING');assert.equal(current.run.hostStopReason,'aborted');assert.equal(f.cancels(),1)
-  assert.throws(()=>f.manager.retry({taskId:f.taskId,idempotencyKey:'unsafe'}),{code:'task-busy'})
+  await assert.rejects(f.manager.retry({taskId:f.taskId,idempotencyKey:'unsafe'}),{code:'task-busy'})
  })
  test('actual executor cancellation is bounded even if native cancel ignores its signal',async t=>{
   const id='session-'+randomUUID();let hang=false,receivedSignal

@@ -97,7 +97,7 @@ if (!process.argv.includes('--child')) {
     assert.equal(f.manager.get(first.taskId).state, 'RECONCILING')
     const second = await f.submit(); await delay(30)
     assert.equal(f.counts.execute, 1); assert.equal(f.manager.get(second.taskId).state, 'QUEUED')
-    assert.throws(() => f.manager.retry({ taskId: first.taskId, idempotencyKey: 'unsafe' }), { code: 'task-busy' })
+    await assert.rejects(f.manager.retry({ taskId: first.taskId, idempotencyKey: 'unsafe' }), { code: 'task-busy' })
     f.setObservation({ running: false, pendingInput: [] })
     await f.manager.reconcile({ taskId: first.taskId })
     await until(() => f.counts.execute === 2)
