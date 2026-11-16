@@ -1,0 +1,19 @@
+- insert:
+    - id: codex-bridge
+      name: '@local/dsh-codex-bridge'
+      config:
+        model: ''
+        reasoningEffort: ''
+        timeoutMs: 240000
+        maxConcurrency: 2
+        sandbox: read-only
+        promptPolicy: true
+        # v0.2: one long-lived codex app-server process per (agent, cwd) keeps the
+        # strategist's context across consults. `exec` restores the v0.1 behaviour.
+        sessionMode: app-server
+        maxSessions: 3
+        sessionIdleMs: 900000
+        # v0.2: reverse bridge — Codex drives, DSH executes. Exposes
+        # POST /api/dsh-codex-bridge.execute behind a bearer token.
+        reverseBridge: true
+        reversePreset: standard

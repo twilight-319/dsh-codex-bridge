@@ -1,0 +1,61 @@
+{
+  "name": "@local/dsh-codex-bridge",
+  "version": "1.0.1",
+  "private": true,
+  "description": "Codex plans, DSH executes: native-session workbench, parallel tasks and question relay.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/twilight-319/dsh-codex-bridge.git"
+  },
+  "homepage": "https://github.com/twilight-319/dsh-codex-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/twilight-319/dsh-codex-bridge/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/*.js",
+    "bin/*.mjs",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "locale/*.json",
+    "tools/test-*.mjs"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node tools/test-all.mjs"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "codex",
+    "gpt",
+    "advisor"
+  ]
+}

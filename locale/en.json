@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Codex advisor bridge",
+    "description": "Codex decides and DSH executes locally: session reuse, parallel tasks, question relay, execution policy and native session details. New installations inherit DSH permissions; full access requires explicit confirmation. Reconnect Codex MCP after upgrading."
+  }
+}
