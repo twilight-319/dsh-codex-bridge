@@ -1226,6 +1226,8 @@ window.__ModuleLoader__.load({
     }
 
     var BRIDGE_CSS = `
+.cbt{height:100%;box-sizing:border-box;overflow:auto;background:var(--dsw-alias-bg-base,#f7f8fa);color:var(--dsw-alias-label-primary,#17202d);font:14px/1.6 system-ui,sans-serif;padding:24px}.cbt *{box-sizing:border-box}.cbt h1{font-size:21px;margin:0 auto 0 0}.cbt h2{font-size:18px;margin:0;overflow-wrap:anywhere;min-width:0}.cbt h3{font-size:15px}.cbt-toolbar,.cbt-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.cbt-toolbar{margin-bottom:20px}.cbt-button{border:1px solid var(--dsw-alias-border-l1,#d8dfe7);border-radius:7px;background:var(--dsw-alias-bg-layer-1,#fff);color:inherit;padding:7px 12px;cursor:pointer;font:inherit}.cbt-button.primary{background:#365fd1;color:white}.cbt button:disabled{opacity:.5;cursor:default}.cbt button:focus-visible,.cbt input:focus-visible,.cbt textarea:focus-visible{outline:2px solid #628cf2;outline-offset:3px}.cbt-grid{display:grid;grid-template-columns:280px minmax(0,1fr);gap:20px;align-items:start}.cbt-list,.cbt-detail,.cbt-form,.cbt-diagnostics{padding:20px;border:1px solid var(--dsw-alias-border-l1,#d8dfe7);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff)}.cbt-detail{min-width:0}.cbt-list{padding:12px}.cbt label{display:flex;flex-direction:column;gap:5px;margin:10px 0}.cbt input:not([type=checkbox]):not([type=radio]),.cbt textarea{width:100%;padding:9px;border:1px solid var(--dsw-alias-border-l1,#d8dfe7);border-radius:6px;background:var(--dsw-alias-bg-layer-1,#fff);color:inherit;font:inherit}.cbt textarea{min-height:96px;resize:vertical}.cbt .cbt-check{flex-direction:row;align-items:center;gap:8px}.cbt-task{display:flex;flex-direction:column;gap:5px;text-align:left;width:100%;padding:12px;margin:8px 0;border:1px solid transparent;border-radius:7px;background:transparent;color:inherit;cursor:pointer;font:inherit}.cbt-task.selected{border-color:#628cf2;background:var(--dsw-alias-bg-layer-2,#f1f4f9)}.cbt-task strong{font-size:13px;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.cbt-task small,.cbt-muted{font-size:12px;color:var(--dsw-alias-label-secondary,#637083);overflow-wrap:anywhere}.cbt pre,.cbt code{white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.7 ui-monospace,monospace}.cbt pre{padding:14px;background:var(--dsw-alias-bg-layer-2,#f1f4f9);border-radius:6px}.cbt code{display:block}.cbt dl{display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px;margin:20px 0}.cbt dd{margin:0;overflow-wrap:anywhere}.cbt dt{color:var(--dsw-alias-label-secondary,#637083)}.cbt-form,.cbt-diagnostics{margin-bottom:20px}.cbt-notice{padding:12px;background:var(--dsw-alias-bg-layer-2,#f1f4f9);border-radius:6px}.cbt-error{padding:12px;border:1px solid #b94343;border-radius:6px}.cbt-empty{padding:60px 20px;text-align:center}.cbt fieldset{border:1px solid var(--dsw-alias-border-l1,#d8dfe7);border-radius:6px;margin:12px 0}.cbt summary{cursor:pointer;padding:8px 0}@media(max-width:760px){.cbt{padding:14px}.cbt-grid{grid-template-columns:minmax(0,1fr)}.cbt-list{max-height:300px;overflow:auto}.cbt-toolbar{gap:8px}.cbt-detail,.cbt-form{padding:14px}.cbt dl{grid-template-columns:90px minmax(0,1fr)}}
+
 .bwk{--bwk-accent:#4f7cf7;--bwk-ok:#3fae87;--bwk-warn:#d19a3c;--bwk-err:#e06b6b;display:grid;grid-template-columns:272px minmax(0,1fr) 344px;position:relative;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.6}
 .bwk *{box-sizing:border-box}
 .bwk button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
@@ -1381,7 +1383,103 @@ window.__ModuleLoader__.load({
           h('span', { className: 'bwk-row-meta' }, 'DSH · ' + status.label + ' · ' + fmtWhen(record.startedAt))))
     }
 
+    function TaskWorkbench(props) {
+      var state = useState({tasks:[], nextCursor:null}), listing = state[0], setListing = state[1]
+      var detailState = useState(null), task = detailState[0], setTask = detailState[1]
+      var eventsState = useState([]), events = eventsState[0], setEvents = eventsState[1]
+      var diagnosticsState = useState(null), diagnostics = diagnosticsState[0], setDiagnostics = diagnosticsState[1]
+      var errorState = useState(''), error = errorState[0], setError = errorState[1]
+      var busyState = useState(false), busy = busyState[0], setBusy = busyState[1]
+      var formState = useState(false), showForm = formState[0], setShowForm = formState[1]
+      var draftState = useState({goal:'',cwd:'',plan:'',acceptance:'',seconds:300,review:false,verificationProfile:''}), draft = draftState[0], setDraft = draftState[1]
+      var filterState = useState(''), filter = filterState[0], setFilter = filterState[1]
+      var pageState = useState(0), pageCursor = pageState[0], setPageCursor = pageState[1]
+      var historyState = useState(''), historyId = historyState[0], setHistoryId = historyState[1]
+      var answersState = useState({}), answers = answersState[0], setAnswers = answersState[1]
+      var acceptState = useState(false), accepted = acceptState[0], setAccepted = acceptState[1]
+      var selected = React.useRef(''), alive = React.useRef(true), generation = React.useRef(0), submissionKey = React.useRef(''), retryKeys = React.useRef({}), eventCursor = React.useRef(0)
+      var labels = {QUEUED:'排队中',RUNNING:'执行中',VERIFYING:'验证中',WAITING_INPUT:'等待回答',WAITING_APPROVAL:'等待原生审批',CANCEL_REQUESTED:'正在确认停止',RECONCILING:'等待对账',REVIEW_REQUIRED:'待人工核对',SUCCEEDED:'验收通过',FAILED:'失败',CANCELLED:'已取消',LEGACY:'旧版只读记录'}
+      function request(action, input) {
+        var controller = new AbortController(), timer = setTimeout(function(){controller.abort()},25000)
+        return fetch('/api/dsh-codex-bridge.v2.task-workbench',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({},input||{},{action:action})),signal:controller.signal})
+          .then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.message||body.error||'请求失败');return body.value})})
+          .finally(function(){clearTimeout(timer)})
+      }
+      function load() {
+        var current = selected.current, ticket = ++generation.current
+        return Promise.all([request('list',{cursor:pageCursor,limit:50}), current ? request('get',{taskId:current}) : Promise.resolve(null), current ? request('events',{taskId:current,cursor:eventCursor.current}) : Promise.resolve({events:[]})])
+          .then(function(result){if(!alive.current||ticket!==generation.current)return;setListing(result[0]);setTask(result[1]);eventCursor.current=result[2].cursor||eventCursor.current;setEvents(function(previous){var seen=new Set(previous.map(function(item){return item.eventId}));return previous.concat(result[2].events.filter(function(item){return !seen.has(item.eventId)}))});setError('')})
+          .catch(function(cause){if(alive.current&&ticket===generation.current)setError('连接或读取失败：'+cause.message+'。保留当前记录，刷新不会重新执行任务。')})
+      }
+      useEffect(function(){alive.current=true;load();var timer=setInterval(load,5000);return function(){alive.current=false;generation.current++;clearInterval(timer)}},[pageCursor])
+      useEffect(function(){setAnswers({})},[task&&task.activeRunId,task&&task.run&&task.run.question&&task.run.question.requestId])
+      useEffect(function(){setAccepted(false)},[task&&task.revision,task&&task.run&&task.run.evidenceHash])
+      function choose(id){selected.current=id;eventCursor.current=0;setEvents([]);setHistoryId('');setAccepted(false);setTask(null);load()}
+      function operate(action,input) {
+        if(busy)return Promise.resolve()
+        setBusy(true);setError('')
+        return request(action,input).then(function(result){if(!alive.current)return;if(result&&result.taskId){if(selected.current!==result.taskId){eventCursor.current=0;setEvents([])}selected.current=result.taskId;setTask(result)}if(action==='importLegacy')setDiagnostics(null);return load()})
+          .catch(function(cause){if(alive.current)setError(cause.message+(action==='submit'?'。提交结果未确认；保留提交编号，重试会关联原任务。':''))})
+          .finally(function(){if(alive.current)setBusy(false)})
+      }
+      function field(key,value){setDraft(Object.assign({},draft,((function(){var patch={};patch[key]=value;return patch})())))}
+      function submit(event) {
+        event.preventDefault()
+        if(!submissionKey.current)submissionKey.current=crypto.randomUUID()
+        var input={goal:draft.goal,cwd:draft.cwd||undefined,plan:draft.plan,acceptance:draft.acceptance.split('\n').filter(Boolean),timeoutMs:Number(draft.seconds)*1000,review:draft.review,idempotencyKey:submissionKey.current}
+        if(draft.verificationProfile)input.verificationProfile=draft.verificationProfile
+        setBusy(true);setError('')
+        request('submit',input).then(function(result){if(!alive.current)return;selected.current=result.taskId;eventCursor.current=0;setEvents([]);setTask(result);submissionKey.current='';setShowForm(false);setDraft(Object.assign({},draft,{goal:''}));return load()})
+          .catch(function(cause){if(alive.current)setError(cause.message+'。提交结果未确认，请保留编号并以相同内容重试。')})
+          .finally(function(){if(alive.current)setBusy(false)})
+      }
+      function diagnose(){request('diagnose').then(function(value){if(alive.current)setDiagnostics(value)}).catch(function(cause){if(alive.current)setError(cause.message)})}
+      function openSession(){if(nativeOpen&&task&&task.run.sessionId)Promise.resolve(nativeOpen(task.run.sessionId)).catch(function(cause){setError(cause.message)})}
+      var run = task && ((task.history||[]).find(function(item){return item.runId===historyId}) || task.run)
+      var currentRun = !historyId || task && task.activeRunId===historyId
+      var editable = task && !task.legacy && currentRun
+      var terminalTask = task && ['SUCCEEDED','FAILED','CANCELLED','REVIEW_REQUIRED','LEGACY'].includes(task.state)
+      var visible = listing.tasks.filter(function(item){return (item.goal+' '+item.cwd+' '+item.taskId).toLowerCase().includes(filter.toLowerCase())})
+      function button(text,fn,disabled,extra){return h('button',Object.assign({type:'button',className:'cbt-button',onClick:fn,disabled:disabled},extra||{}),text)}
+      var form = showForm ? h('form',{className:'cbt-form',onSubmit:submit},h('h2',null,'新建任务'),
+        h('label',null,'任务目标',h('textarea',{required:true,maxLength:20000,value:draft.goal,onChange:function(e){field('goal',e.target.value)}})),
+        h('label',null,'工作目录',h('input',{value:draft.cwd,placeholder:'留空使用宿主默认目录',onChange:function(e){field('cwd',e.target.value)}})),
+        h('details',null,h('summary',null,'计划与验收条件'),h('label',null,'计划',h('textarea',{maxLength:20000,value:draft.plan,onChange:function(e){field('plan',e.target.value)}})),h('label',null,'验收条件（每行一项）',h('textarea',{value:draft.acceptance,onChange:function(e){field('acceptance',e.target.value)}}))),
+        h('div',{className:'cbt-row'},h('label',null,'总预算（秒，包含等待）',h('input',{type:'number',min:1,max:600,required:true,value:draft.seconds,onChange:function(e){field('seconds',e.target.value)}})),
+          h('label',null,'验证配置名称',h('input',{value:draft.verificationProfile,placeholder:'用户预设的 profile 名称',onChange:function(e){field('verificationProfile',e.target.value)}}))),
+        h('label',{className:'cbt-check'},h('input',{type:'checkbox',checked:draft.review,onChange:function(e){field('review',e.target.checked)}}),'执行结束后调用 Codex 审查'),
+        submissionKey.current?h('p',{className:'cbt-muted'},'提交编号：'+submissionKey.current):null,
+        h('button',{className:'cbt-button primary',type:'submit',disabled:busy||!draft.goal.trim()},busy?'正在提交…':'提交任务')):null
+      var question=editable&&task.state==='WAITING_INPUT'&&run.question
+      var questionForm=question?h('form',{className:'cbt-form',onSubmit:function(e){e.preventDefault();operate('answer',{taskId:task.taskId,runId:task.activeRunId,requestId:question.requestId,answers:question.questions.map(function(q){return {id:q.id,selected:answers[q.id]&&answers[q.id].selected||[],custom:answers[q.id]&&answers[q.id].custom||''}})})}},h('h3',null,'本次问题'),
+        question.questions.map(function(q){return h('fieldset',{key:q.id},h('legend',null,q.question),(q.options||[]).map(function(option){var chosen=answers[q.id]&&answers[q.id].selected||[];return h('label',{key:option.label,className:'cbt-check'},h('input',{type:q.multiSelect?'checkbox':'radio',name:question.requestId+q.id,checked:chosen.includes(option.label),onChange:function(){var next=Object.assign({},answers);next[q.id]=Object.assign({},next[q.id],{selected:q.multiSelect?(chosen.includes(option.label)?chosen.filter(function(v){return v!==option.label}):chosen.concat(option.label)):[option.label]});setAnswers(next)}}),option.label)}),h('label',null,'补充回答',h('input',{value:answers[q.id]&&answers[q.id].custom||'',onChange:function(e){var next=Object.assign({},answers);next[q.id]=Object.assign({},next[q.id],{custom:e.target.value});setAnswers(next)}})))}),h('button',{className:'cbt-button primary',type:'submit',disabled:busy},'回答并继续')):null
+      var body=task?h('article',{className:'cbt-detail'},h('div',{className:'cbt-row'},h('h2',null,task.goal),h('span',{className:'cbt-status'},labels[task.state]||task.state)),
+        h('p',{className:'cbt-muted'},task.cwd),h('p',{className:'cbt-muted'},task.taskId),
+        task.legacy?h('p',{className:'cbt-notice'},'旧版只读快照：未记录 Run 和验收证据，不可从此记录重试。'):null,
+        h('div',{className:'cbt-row'},button('打开原生会话',openSession,!task.run.sessionId),editable&&!terminalTask?button('请求取消',function(){operate('cancel',{taskId:task.taskId})},busy):null,
+          editable&&['RECONCILING','WAITING_APPROVAL','CANCEL_REQUESTED'].includes(task.state)?button('对账 / 补发取消',function(){operate('reconcile',{taskId:task.taskId})},busy):null,
+          editable&&terminalTask?button('创建修复 Run',function(){if(window.confirm('创建新的修复 Run，将复用本任务上下文并受两轮上限约束。'))operate('retry',{taskId:task.taskId,idempotencyKey:retryKeys.current[task.taskId+task.activeRunId]||(retryKeys.current[task.taskId+task.activeRunId]=crypto.randomUUID())})},busy||run.attempt>=3):null),
+        task.state==='WAITING_APPROVAL'?h('p',{className:'cbt-notice'},'请打开原生会话处理审批，然后对账。不要重新提交原任务。'):null,
+        ['RECONCILING','CANCEL_REQUESTED'].includes(task.state)?h('p',{className:'cbt-notice'},'停止尚未确认。同项目任务将继续等待；对账可能补发已经请求的取消。'):null,
+        task.plan?h('details',null,h('summary',null,'计划与验收条件'),h('pre',null,task.plan),h('ul',null,(task.acceptance||[]).map(function(a,i){return h('li',{key:i},a)}))):null,
+        h('nav',{className:'cbt-row','aria-label':'运行历史'},button('当前运行',function(){setHistoryId('')},!historyId),(task.history||[]).map(function(item){return button('Run '+item.attempt,function(){setHistoryId(item.runId)},false,{key:item.runId,'aria-pressed':historyId===item.runId})})),
+        h('dl',null,h('dt',null,'执行结果'),h('dd',null,run.outcome||'尚未确认'),h('dt',null,'宿主结束原因'),h('dd',null,run.hostStopReason||'未记录'),h('dt',null,'验收状态'),h('dd',null,run.verification&&run.verification.status||'未记录'),h('dt',null,'执行模型'),h('dd',null,run.execution&&run.execution.selection?run.execution.selection.provider+'/'+run.execution.selection.model:'未记录'),h('dt',null,'Run'),h('dd',null,run.runId||'未记录')),
+        run.observationError?h('p',{role:'alert'},'观察失败：'+run.observationError.message):null,
+        h('h3',null,'结果与证据'),h('pre',null,task.legacy?task.legacySnapshot.text||'未记录':run.result&&run.result.text||'暂无文本结果'),
+        h('ul',null,(run.verification&&run.verification.checks||[]).map(function(check,i){return h('li',{key:i},(check.path||(check.argv||[]).join(' ')||'验证命令')+' · '+(check.passed===true?'通过':check.passed===false?'失败':check.status||'未验证'))})),
+        h('ul',null,(run.verification&&run.verification.artifacts||[]).map(function(item){return h('li',{key:item.path},item.path+' · '+item.bytes+' bytes',h('code',null,item.hash))})),
+        run.review?h('p',null,'Codex 审查：'+run.review.verdict+' · '+(run.review.summary||'')):null,
+        questionForm,
+        editable&&task.state==='REVIEW_REQUIRED'?h('section',{className:'cbt-form'},h('h3',null,'人工验收'),h('label',{className:'cbt-check'},h('input',{type:'checkbox',checked:accepted,onChange:function(e){setAccepted(e.target.checked)}}),'我已核对当前 Run 的产物和验收证据'),button('接受当前结果',function(){operate('review',{taskId:task.taskId,runId:task.activeRunId,expectedRevision:task.revision,evidenceHash:run.evidenceHash,decision:'accept'})},busy||!accepted),button('要求修改',function(){operate('review',{taskId:task.taskId,runId:task.activeRunId,expectedRevision:task.revision,evidenceHash:run.evidenceHash,decision:'changes_requested'})},busy)):null,
+        h('details',null,h('summary',null,'事件时间线 · '+events.length+' 项'),button('读取后续事件',load,busy),h('ol',null,events.map(function(item){return h('li',{key:item.eventId},new Date(item.at).toLocaleString()+' · '+item.type)})))):h('div',{className:'cbt-empty'},'选择任务查看运行记录、问题和验收证据。')
+      return h('section',{className:'cbt','aria-label':'任务工作台'},h('header',{className:'cbt-toolbar'},button('返回会话',props.onBack,false),h('h1',null,'任务工作台'),button('新建任务',function(){setShowForm(!showForm)},busy,{'aria-expanded':showForm}),button('刷新',load,busy),button('诊断',diagnose,busy),button('导入旧记录',function(){if(window.confirm('将旧台账导入为只读快照，不重跑任务。请先结束活动任务。'))operate('importLegacy',{})},busy)),
+        error?h('p',{className:'cbt-error',role:'alert'},error):null,
+        diagnostics?h('section',{className:'cbt-diagnostics'},h('h2',null,'诊断'),h('p',null,'版本 '+diagnostics.version+' · 宿主 Node '+diagnostics.hostNode+' · 任务库 '+diagnostics.store.status),h('p',null,'真机验收：'+diagnostics.liveAcceptance),h('ul',null,Object.keys(diagnostics.capabilities).map(function(key){return h('li',{key:key},key+'：'+(diagnostics.capabilities[key]?'可用':'不可用 / 未确认'))}))):null,
+        form,h('div',{className:'cbt-grid'},h('aside',{className:'cbt-list'},h('label',null,'筛选本页任务',h('input',{type:'search',value:filter,onChange:function(e){setFilter(e.target.value)}})),visible.length?visible.map(function(item){return h('button',{key:item.taskId,type:'button',className:'cbt-task'+(selected.current===item.taskId?' selected':''),'aria-pressed':selected.current===item.taskId,onClick:function(){choose(item.taskId)}},h('strong',null,item.goal),h('span',null,labels[item.state]||item.state),h('small',null,item.cwd))}):h('p',null,'本页没有匹配任务'),h('div',{className:'cbt-row'},button('上一页',function(){setPageCursor(Math.max(0,pageCursor-50))},pageCursor===0),button('下一页',function(){setPageCursor(listing.nextCursor)},listing.nextCursor===null))),body))
+    }
+
     function BridgeWorkbench() {
+      var workspaceState = useState(false), tasksVisible = workspaceState[0], setTasksVisible = workspaceState[1]
       var codexState = useState(null), codex = codexState[0], setCodex = codexState[1]
       var ledgerState = useState(null), ledger = ledgerState[0], setLedger = ledgerState[1]
       var selState = useState({ kind: bridgeUI.kind, id: bridgeUI.id }), sel = selState[0], setSel = selState[1]
@@ -1789,12 +1887,14 @@ window.__ModuleLoader__.load({
           h('span', { style: { opacity: .5 } }, '/'),
           h('b', null, sel.kind === 'thread' ? ((selectedThreadInfo && selectedThreadInfo.name) || 'Codex 会话') : (selectedExecution ? bwkTaskOf(selectedExecution) : '请选择会话'))),
         h('div', { className: 'bwk-actions' },
+          h('button', {type:'button',className:'bwk-btn small',onClick:function(){setTasksVisible(true)}},'任务'),
           error ? h('span', { className: 'bwk-status err' }, '有错误') : null,
           h('button', { type: 'button', className: 'bwk-btn small', 'aria-pressed': inspector, title: inspector ? '收起右侧详情' : '打开右侧详情', onClick: function () { bridgeUI.inspector = !inspector; setInspector(!inspector) } },
             bwkIcon('panel'), inspector ? '收起' : '详情'),
           h('button', { type: 'button', className: 'bwk-btn small', disabled: threadBusy, title: '刷新数据', onClick: function () { load() } }, bwkIcon('refresh'), threadBusy ? '刷新中' : '刷新'),
           h('button', { type: 'button', className: 'bwk-btn small', title: '执行模型与思考强度', onClick: function () { bridgeUI.settings = true; setSettings(true) } }, bwkIcon('settings'), '执行模型')))
 
+      if(tasksVisible) return h(TaskWorkbench,{onBack:function(){setTasksVisible(false)}})
       return h('div', { className: 'bwk' + (inspector ? '' : ' no-inspector') },
         tree,
         h('main', { className: 'bwk-main' },

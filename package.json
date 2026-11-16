@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-codex-bridge",
-  "version": "2.0.0-beta.1.2",
+  "version": "2.0.0-rc.1",
   "private": true,
   "description": "Codex plans, DSH executes: native-session workbench, parallel tasks and question relay.",
   "type": "module",
@@ -33,7 +33,9 @@
     "docs/*.md",
     "LICENSE",
     "locale/*.json",
-    "tools/test-*.mjs"
+    "tools/test-*.mjs",
+    "docs/*.json",
+    "tools/release-check.mjs"
   ],
   "dsh": {
     "bundle": {
@@ -50,7 +52,9 @@
     }
   },
   "scripts": {
-    "test": "node tools/test-all.mjs"
+    "test": "node tools/test-all.mjs",
+    "doctor": "node bin/doctor.mjs",
+    "release:check": "node tools/release-check.mjs"
   },
   "keywords": [
     "dsh-plugin",

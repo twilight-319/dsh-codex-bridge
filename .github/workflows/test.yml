@@ -16,3 +16,26 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm test
       - run: npm pack --ignore-scripts --dry-run
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install isolated browser test dependencies
+        run: npm install --prefix "$RUNNER_TEMP/bridge-ui" --ignore-scripts --no-audit --no-fund --no-package-lock react@18.3.1 react-dom@18.3.1 playwright@1.62.1
+      - name: React and Chromium workbench checks
+        env:
+          BRIDGE_PLAYWRIGHT_MODULE: ${{ runner.temp }}/bridge-ui/node_modules/playwright
+          BRIDGE_REACT_MODULES: ${{ runner.temp }}/bridge-ui/node_modules
+          BRIDGE_CHROMIUM_PATH: /usr/bin/google-chrome
+          BRIDGE_UI_OUTPUT: ${{ runner.temp }}/bridge-ui-screenshots
+          BRIDGE_UI_LOG_PREVIEW: '1'
+        run: node tools/test-browser-workbench.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: workbench-fixture-screenshots
+          path: ${{ runner.temp }}/bridge-ui-screenshots
+          retention-days: 7
