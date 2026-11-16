@@ -109,3 +109,17 @@ test('execution creates a real artifact then profile hash and read-only review d
   assert.equal(done.run.execution.selection.model,'controlled-host')
  }finally{if(manager)await manager.dispose();await rm(dir,{recursive:true,force:true})}
 })
+test('upgrading path normalization preserves older idempotency receipts and rejects changed input',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'bridge-old-idempotency-'));let manager
+ try{
+  const store=createTaskStore(join(dir,'store')),payload={goal:'original',cwd:dir,idempotencyKey:'old-key',timeoutMs:300000}
+  const oldHash=digest(Object.fromEntries(Object.keys(payload).sort().map(k=>[k,payload[k]])))
+  store.commit({taskId:'old-task',activeRunId:'old-run',goal:'original',cwd:dir,state:'REVIEW_REQUIRED',revision:1,createdAt:1,submissionKey:digest({cwd:dir,key:'old-key'}),payloadHash:oldHash,run:{runId:'old-run',outcome:'completed'}},'fixture.beta_receipt')
+  let executions=0;manager=createTaskManager({store,executor:{async execute(){executions++},async dispose(){}}})
+  assert.equal((await manager.submit(payload)).taskId,'old-task')
+  await assert.rejects(manager.submit({...payload,goal:'changed'}),{code:'idempotency-conflict'})
+  const alias=dir+'-alias';await symlink(dir,alias,process.platform==='win32'?'junction':'dir')
+  try{assert.equal((await manager.submit({...payload,cwd:alias})).taskId,'old-task')}finally{await rm(alias,{force:true})}
+  assert.equal(executions,0)
+ }finally{if(manager)await manager.dispose();await rm(dir,{recursive:true,force:true})}
+})

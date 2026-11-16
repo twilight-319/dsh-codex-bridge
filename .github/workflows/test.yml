@@ -23,6 +23,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Install Chinese screenshot fonts
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
       - name: Install isolated browser test dependencies
         run: npm install --prefix "$RUNNER_TEMP/bridge-ui" --ignore-scripts --no-audit --no-fund --no-package-lock react@18.3.1 react-dom@18.3.1 playwright@1.62.1
       - name: React and Chromium workbench checks
