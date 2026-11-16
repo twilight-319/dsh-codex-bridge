@@ -1,5 +1,7 @@
 import { tuningConfig } from './lib/task-tuning.js'
 import { taskBudgets } from './lib/task-budget.js'
+import { createTaskBrowserApi, TASK_BROWSER_PATH } from './lib/task-browser-api.js'
+import { collectTaskDiagnostics } from './lib/task-diagnostics.js'
 import { createTaskStore } from './lib/task-store.js'
 import { createTaskManager } from './lib/task-manager.js'
 import { join } from 'node:path'
@@ -398,15 +400,16 @@ export function apply(ctx, config = {}) {
     })
     return taskManager
   }
-  if(resolved.page!==false) mountBrowserRoute(ctx,'/api/dsh-codex-bridge.v2.tasks.review',['POST'],async request=>{
-    try {
-      if(request.method!=='POST')return new Response('',{status:405})
-      const origin=request.headers.get('origin')
-      if(origin && origin!==new URL(request.url).origin)return new Response('',{status:403})
-      const raw=await request.text();if(raw.length>20000)return new Response('',{status:413})
-      return new Response(JSON.stringify({ok:true,value:getTaskManager().review(JSON.parse(raw))}),{headers:{'content-type':'application/json','cache-control':'no-store'}})
-    }catch(error){return new Response(JSON.stringify({ok:false,error:error.code??'review-failed'}),{status:error.status??500,headers:{'content-type':'application/json'}})}
-  })
+  if (resolved.page !== false) {
+    const handler = createTaskBrowserApi({
+      manager:getTaskManager,
+      diagnostics:() => collectTaskDiagnostics({directory:join(homedir(),'.dsh','codex-bridge','tasks-v2'),ctx,version:PLUGIN_VERSION,codexBin:resolveCodexBin(resolved.codexPath)}),
+      legacyRecords:() => readSessions({limit:10000,includeArchive:true}),
+    })
+    mountBrowserRoute(ctx,TASK_BROWSER_PATH,['POST'],handler)
+    // Preserve the Beta 1 human review route, with the same authenticated implementation.
+    mountBrowserRoute(ctx,'/api/dsh-codex-bridge.v2.tasks.review',['POST'],async request => { try { const input=await request.json(); return handler(new Request(request.url,{method:'POST',headers:request.headers,body:JSON.stringify({...input,action:'review'})})) } catch {return new Response('',{status:400})} })
+  }
   if (resolved.reverseBridge !== false) {
     try {
       track(

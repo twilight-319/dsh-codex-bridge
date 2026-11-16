@@ -1,8 +1,18 @@
-# Codex × DSH bridge 2.0 Beta 1
+# Codex × DSH bridge 2.0 RC
+
+工程收尾候选 **2.0.0-rc.2**，发布仍为 **NO-GO，等待固定 RC 的真机复验**。新增任务工作台、只读 doctor、旧记录导入、备份恢复与发布证据检查。左侧 Codex → **任务** 即可进入。
+
+RC 位于 [`feat/task-core-beta1` / PR #1](https://github.com/twilight-319/dsh-codex-bridge/pull/1)，`main` 仍为 1.x。复验时使用 PR 当前完整 40 位提交 SHA，按下方 Git spec 固定安装；直接安装默认仓库地址不会获得此 RC。升级前先结束或核对在途任务，并按发布验收文档备份。
+
+- [2.0 使用 升级与发布验收](docs/V2_RELEASE.md)
+- [Beta 1 阻断与复验记录](docs/BETA1_RETEST.md)
+- 默认 `npm run release:check` 会拒绝发布，直至提供绑定当前提交的完整验收证据。
+
+## 2.0 核心能力与兼容接口
 
 Beta 1 候选实现，保留 1.x 三个 MCP 工具。新增持久化任务接口、幂等、取消与对账、验证证据，以及显式驱动的执行 → 验证 → Codex 审查流程。Windows DSH 真机联调仍是发布门槛，不能用离线测试代替。
 
-## 当前本地修复候选 2.0.0-beta.1.4
+## 合并保留的任务调优与长任务能力
 
 新增任务调优首版：授权1～2模型池、Codex分项模型/档位/预算选择、只读preview、提交冻结与四层审计、项目隔离历史预算建议。异步submit现支持reasoningEffort（含授权max）、provider/model及tuning；模型/档位冷启动使用明确用户标签，不假称已历史学习。参见[任务调优规格与用法](docs/TASK_TUNING.md)。
 
@@ -48,7 +58,7 @@ verificationProfiles:
 
 未配置验证、证据不可用或审查未通过时，执行完成仍为 `REVIEW_REQUIRED`；明确失败的检查为 `FAILED`。`review:true` 使用现有 Codex 参谋进行只读审查。`plan` 与验收条件由调用方提供；后台不自动规划或无限修复。
 
-人工接受仅开放在浏览器认证路由 `POST /api/dsh-codex-bridge.v2.tasks.review`，需要 `taskId/runId/expectedRevision/evidenceHash/decision`；decision 为 `accept` 或 `changes_requested`。它不作为 MCP 授权工具开放。完整工作台入口属于 Beta 2 范围。
+人工接受仅开放在浏览器认证路由 `POST /api/dsh-codex-bridge.v2.tasks.review`，需要 `taskId/runId/expectedRevision/evidenceHash/decision`；decision 为 `accept` 或 `changes_requested`。它不作为 MCP 授权工具开放。当前 RC 已提供任务工作台入口。
 
 ## 存储和恢复
 
@@ -62,7 +72,7 @@ verificationProfiles:
 
 `npm test` 包含两轮验收回归、任务核心、真实 MCP stdio 到本机 HTTP 线路、实际 sessionController 适配器集成测试及原 11 组回归。CI 使用 Windows Node 22/24。安装包继续零运行时依赖、无安装和构建脚本。
 
-Beta 1 发布前仍需在目标 Windows DSH 验证：新建/复用、取消与真实命令停止、连续问答、原生审批后对账、插件重载、日志文件持久化、Codex 审查，以及明确授权的验证能力。通用 DAG、自动并行隔离、长期记忆、智能路由和完整工作台不在本候选范围。
+Beta 1 发布前仍需在目标 Windows DSH 验证：新建/复用、取消与真实命令停止、连续问答、原生审批后对账、插件重载、日志文件持久化、Codex 审查，以及明确授权的验证能力。通用 DAG、自动并行隔离、长期记忆、智能路由和完整工作台已在 RC 提供，其 DSH 真机视觉验收仍待完成。
 
 ---
 

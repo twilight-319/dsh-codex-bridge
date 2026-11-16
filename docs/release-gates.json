@@ -1,0 +1,16 @@
+{
+  "targetVersion": "2.0.0",
+  "candidateVersion": "2.0.0-rc.2",
+  "sourceCommit": null,
+  "gates": [
+    {"id":"offline-regressions","status":"not-verified","evidence":""},
+    {"id":"windows-ci","status":"not-verified","evidence":""},
+    {"id":"browser-fixtures","status":"not-verified","evidence":""},
+    {"id":"windows-dsh-lifecycle","status":"not-verified","evidence":""},
+    {"id":"m3-live-profile-review","status":"not-verified","evidence":""},
+    {"id":"native-approval","status":"not-verified","evidence":""},
+    {"id":"crash-recovery","status":"not-verified","evidence":""},
+    {"id":"rollback-live","status":"not-verified","evidence":""},
+    {"id":"dsh-visual-keyboard","status":"not-verified","evidence":""}
+  ]
+}
