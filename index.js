@@ -1,3 +1,7 @@
+import { createTaskStore } from './lib/task-store.js'
+import { createTaskManager } from './lib/task-manager.js'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
 /**
  * Codex advisor bridge — GPT decides at decision points, DeepSeek executes.
  *
@@ -53,6 +57,7 @@ const DEFAULTS = {
   reverseBridge: true,
   reversePreset: 'standard',
   page: true,
+  verificationProfiles: {},
 }
 
 const POLICY = `## Codex advisor (codex_* tools)
@@ -357,6 +362,7 @@ export function apply(ctx, config = {}) {
   // driver) can ask this DSH process to execute a task. The executor is built on
   // first use because the session controller may mount after this plugin.
   let executor = null
+  let taskManager = null
   const getExecutor = () => {
     if (executor === null) {
       executor = createExecutor({
@@ -369,16 +375,40 @@ export function apply(ctx, config = {}) {
     }
     return executor
   }
+  const getTaskManager = () => {
+    if (!taskManager) taskManager = createTaskManager({
+      store:createTaskStore(join(homedir(),'.dsh','codex-bridge','tasks-v2')),
+      executor:getExecutor(), profiles:resolved.verificationProfiles,
+      verificationService:(()=>{try{return typeof ctx.get==='function' ? ctx.get('bridgeVerification') : ctx.bridgeVerification}catch{return null}})(),
+      reviewer: async (task,signal) => {
+        const result=await runner.consult({prompt:buildPrompt('review',{context:JSON.stringify({goal:task.goal,acceptance:task.acceptance,before:task.run.before,verification:task.run.verification}).slice(0,120000),diff:task.run.after?.diff ?? ''},{cwd:task.cwd,files:'',diff:task.run.after?.diff ?? ''}),schema:SCHEMAS.review,cwd:task.cwd,signal,kind:'review',sessionKey:'task-review|'+task.taskId})
+        const parsed=parseAnswer(result.answer)
+        if(!parsed.ok) throw new Error('invalid review')
+        return assertResultShape('review',parsed.value)
+      },
+    })
+    return taskManager
+  }
+  if(resolved.page!==false) mountBrowserRoute(ctx,'/api/dsh-codex-bridge.v2.tasks.review',['POST'],async request=>{
+    try {
+      if(request.method!=='POST')return new Response('',{status:405})
+      const origin=request.headers.get('origin')
+      if(origin && origin!==new URL(request.url).origin)return new Response('',{status:403})
+      const raw=await request.text();if(raw.length>20000)return new Response('',{status:413})
+      return new Response(JSON.stringify({ok:true,value:getTaskManager().review(JSON.parse(raw))}),{headers:{'content-type':'application/json','cache-control':'no-store'}})
+    }catch(error){return new Response(JSON.stringify({ok:false,error:error.code??'review-failed'}),{status:error.status??500,headers:{'content-type':'application/json'}})}
+  })
   if (resolved.reverseBridge !== false) {
     try {
       track(
         registerHttpRoute({
           ctx,
+          taskManager:getTaskManager,
           executor: {
             version: PLUGIN_VERSION,
             sessionCount: () => readSessions({ limit: 10000 }).length,
-            execute: (input) => getExecutor().execute(input),
-            answer: (input) => getExecutor().answer(input),
+            execute: (input) => getTaskManager().legacyExecute(input),
+            answer: (input) => getTaskManager().legacyAnswer(input),
             isInternalSession: (sessionId) => isInternalSessionId(sessionId),
             // Compact, secret-free view for `dsh_status`: the exact choices the
             // current policy permits for the next execution.
@@ -467,7 +497,8 @@ export function apply(ctx, config = {}) {
   }
   track(() => {
     void runner.dispose()
-    void executor?.dispose?.()
+    if(taskManager) void taskManager.dispose().catch(error=>ctx.logger?.warn?.(error.message))
+    else void executor?.dispose?.()
   })
 
   // The bridge page is a normal central panel (sidebar icon + `main` slot); its

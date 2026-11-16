@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { randomUUID as taskUUID } from 'node:crypto';
+import { TASK_PATH, taskActions } from '../lib/task-api.js';
 // Codex → DSH 反向桥：MCP stdio 服务端（零依赖，只用 node: 内置模块）。
 //
 // 角色：**Codex CLI（GPT）作为 MCP 客户端** spawn 本进程；本进程只做两件事：
@@ -576,6 +578,16 @@ async function requestDsh({ route, method, body, timeoutMs }) {
   return { response, parsed, url, tokenInfo };
 }
 
+const taskCalls = new Map();
+for(const action of taskActions) {
+  TOOLS.push({name:'dsh_task_'+action,description:'持久化任务 '+action+'；submit 幂等提交，get/list/events 查询，cancel 请求停止，reconcile 只对账，answer 回答本次提问。',inputSchema:{type:'object',properties: action==='submit' ? {goal:{type:'string'},plan:{type:'string'},acceptance:{type:'array',items:{type:'string'}},cwd:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'},verificationProfile:{type:'string'},review:{type:'boolean'}} : {taskId:{type:'string'},idempotencyKey:{type:'string'},goal:{type:'string'},runId:{type:'string'},requestId:{type:'string'},answers:{type:'array',items:{type:'object'}},cursor:{type:'integer'},limit:{type:'integer'}},required:action==='submit'?['goal','idempotencyKey']:action==='list'?[]:['taskId'],additionalProperties:false}});
+}
+async function callTask(action,args) {
+  const {response,parsed}=await requestDsh({route:TASK_PATH,method:'POST',body:{...requireObject(args??{},'arguments'),action},timeoutMs:action==='answer'?CONFIG.timeoutMs+10000:10000});
+  if(response.status<200||response.status>=300||parsed.json?.ok!==true||!Object.hasOwn(parsed.json,'value'))return errorResult(failureDetail(parsed.json,'任务请求失败'));
+  return toTextResult(JSON.stringify(parsed.json.value));
+}
+
 // ── 工具实现 ───────────────────────────────────────────────────────────────
 function toTextResult(text, extra) {
   const result = { content: [{ type: 'text', text: String(text ?? '') }] };
@@ -602,9 +614,9 @@ function failureDetail(data, fallback) {
 }
 
 async function callExecute(args) {
-  const { task, cwd, timeoutMs, reasoningEffort, reason, sessionId } = args;
+  const { task, cwd, timeoutMs, reasoningEffort, reason, sessionId, clientCallId } = args;
   const budget = timeoutMs ?? CONFIG.timeoutMs;
-  const body = { task };
+  const body = { task, ...(clientCallId ? {clientCallId}: {}) };
   if (cwd) body.cwd = cwd;
   body.timeoutMs = budget;
   if (sessionId) body.sessionId = sessionId;
@@ -696,13 +708,13 @@ async function callExecute(args) {
 
 
 async function callAnswer(args) {
-  const { sessionId, requestId, answers, timeoutMs } = args;
+  const { sessionId, requestId, answers, timeoutMs, clientCallId } = args;
   const started = Date.now();
   try {
     const { response, parsed, url } = await requestDsh({
       route: '/api/dsh-codex-bridge.v3.answer',
       method: 'POST',
-      body: { sessionId, requestId, answers, timeoutMs },
+      body: { sessionId, requestId, answers, timeoutMs, clientCallId },
       timeoutMs: timeoutMs + 10000,
     });
     const elapsedMs = Date.now() - started;
@@ -839,12 +851,19 @@ async function handleRequest(message) {
       if (typeof name !== 'string' || !name.trim()) {
         throw new InvalidParams('tools/call 缺少 name（必须是字符串）');
       }
+      if(name.startsWith('dsh_task_') && taskActions.includes(name.slice(9))) {
+        if(name==='dsh_task_answer')taskCalls.set(id,{taskId:p.arguments?.taskId});
+        try {writeResult(id,await callTask(name.slice(9),p.arguments));} finally {taskCalls.delete(id)} return;
+      }
       if (name === TOOL_EXECUTE) {
-        writeResult(id, await callExecute(validateExecuteArgs(p.arguments)));
+        const clientCallId=taskUUID();taskCalls.set(id,{clientCallId});
+        try {writeResult(id,await callExecute({...validateExecuteArgs(p.arguments),clientCallId}));}
+        finally {taskCalls.delete(id)}
         return;
       }
       if (name === TOOL_ANSWER) {
-        writeResult(id, await callAnswer(validateAnswerArgs(p.arguments)));
+        const clientCallId=taskUUID();taskCalls.set(id,{clientCallId});
+        try {writeResult(id, await callAnswer({...validateAnswerArgs(p.arguments),clientCallId}));} finally {taskCalls.delete(id)}
         return;
       }
       if (name === TOOL_STATUS) {
@@ -897,7 +916,12 @@ async function handleSingle(message) {
       log('收到 notifications/initialized，进入正常态');
       return;
     }
-    if (method === 'notifications/cancelled' || method === 'notifications/progress') return;
+    if(method==='notifications/cancelled') {
+      const target=taskCalls.get(message.params?.requestId);
+      if(target) void callTask('cancel',target).catch(error=>log('cancel request failed',error.code));
+      return;
+    }
+    if(method==='notifications/progress')return;
     log(`收到未处理的通知: ${method}`);
     return;
   }

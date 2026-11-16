@@ -1,3 +1,59 @@
+# Codex × DSH bridge 2.0 Beta 1
+
+Beta 1 候选实现，保留 1.x 三个 MCP 工具。新增持久化任务接口、幂等、取消与对账、验证证据，以及显式驱动的执行 → 验证 → Codex 审查流程。Windows DSH 真机联调仍是发布门槛，不能用离线测试代替。
+
+## 任务接口
+
+- `dsh_task_submit`：`goal`、`idempotencyKey` 必填；可传 `cwd`、`plan`、`acceptance`、`verificationProfile`、`review`、`timeoutMs`。
+- `dsh_task_get / list / events`：查询快照、分页列表、增量事件。`events` 使用全局 seq 游标。
+- `dsh_task_answer`：传 `taskId`、`runId`、当前 `requestId` 和 `answers`，继续同一个 Run。
+- `dsh_task_cancel`：取消明确的任务，已请求与确认停止分别记录。旧 `dsh_execute` 的 MCP 取消通知也会转发。
+- `dsh_task_reconcile`：核对绑定会话和本轮终止事件，不重新派发命令。
+- `dsh_task_retry`：终结后显式创建修复 Run；传 `taskId`、新 `idempotencyKey`、可选 `goal`。最多两轮修复，历史保留在 `history`，不允许跳过未解决的对账。
+
+```json
+{"goal":"修复失败测试","cwd":"<ABSOLUTE_PROJECT_DIRECTORY>","idempotencyKey":"fix-20261116-001","plan":"先复现，再修复并验证","acceptance":["目标测试通过"],"review":true}
+```
+
+先前没有返回任务编号时，重复使用同一幂等键查询原提交；不要生成新键盲目重跑。同键不同输入明确冲突。客户端断线不等于任务失败。每次运行预算为 1 至 600 秒，包含准备和等待；修复 Run 有新预算。
+
+## 验证与审查
+
+在插件 `config.verificationProfiles` 中由用户预先配置验证，任务只能引用配置名称。例如：
+
+```yaml
+verificationProfiles:
+  build-output:
+    files:
+      - path: dist/index.js
+        # 可选 sha256，省略则只验证文件存在且有界
+    commands:
+      - argv: [npm, test]
+        timeoutMs: 30000
+```
+
+文件验证限制在真实工作目录内，拒绝越界和超过 10 MiB 文件；记录字节哈希。命令仅交给可信宿主 `bridgeVerification.run` 能力，不回退到通用 shell。当前已知宿主没有确认该扩展能力，命令验证会显示 `unavailable`。模型输出不会被当成测试退出码。
+
+未配置验证、证据不可用或审查未通过时，执行完成仍为 `REVIEW_REQUIRED`；明确失败的检查为 `FAILED`。`review:true` 使用现有 Codex 参谋进行只读审查。`plan` 与验收条件由调用方提供；后台不自动规划或无限修复。
+
+人工接受仅开放在浏览器认证路由 `POST /api/dsh-codex-bridge.v2.tasks.review`，需要 `taskId/runId/expectedRevision/evidenceHash/decision`；decision 为 `accept` 或 `changes_requested`。它不作为 MCP 授权工具开放。完整工作台入口属于 Beta 2 范围。
+
+## 存储和恢复
+
+任务数据位于 `~/.dsh/codex-bridge/tasks-v2/`。事务逐次 fsync、校验和链、4 MiB 日志分段，快照仅为派生缓存。单写入锁拒绝多个 DSH 宿主同时使用同一任务库。异常退出残留锁时，必须先确认原宿主停止、备份目录，再移除 `writer.lock`；不自动按 PID 猜测接管。
+
+不完整日志尾部隔离后恢复；完整记录损坏时拒绝写入。重启后所有未终结任务进入 `RECONCILING`，原问答失效。只有绑定会话本轮游标之后的终止事实能确认执行结果；不保证任意外部副作用的恰好一次执行。项目写任务在桥内串行，不阻止外部编辑器写入。
+
+模型与权限沿用现有 DSH 策略，在实际会话接纳时记录已解析策略快照；队列期间策略变更会影响尚未接纳的任务。审批继续在 DSH 原生会话处理。旧会话日志仍作为兼容展示来源，不推测历史父子关系。新数据不会覆盖 1.x 文件。
+
+## 验证范围
+
+`npm test` 包含新增任务核心、真实 MCP stdio 到本机 HTTP 线路、实际 sessionController 适配器集成测试及原 11 组回归。CI 使用 Windows Node 22/24。安装包继续零运行时依赖、无安装和构建脚本。
+
+Beta 1 发布前仍需在目标 Windows DSH 验证：新建/复用、取消与真实命令停止、连续问答、原生审批后对账、插件重载、日志文件持久化、Codex 审查，以及明确授权的验证能力。通用 DAG、自动并行隔离、长期记忆、智能路由和完整工作台不在本候选范围。
+
+---
+
 # Codex × DSH bridge
 
 Codex 负责规划与决策，DeepSeek Harness（DSH）负责本机执行。零运行时依赖，无安装/构建脚本，不修改 DSH 或 Codex 官方文件。

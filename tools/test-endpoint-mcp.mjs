@@ -93,7 +93,8 @@ async function fixture(t) {
     assert.equal(init.result.protocolVersion, '2025-06-18');
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
     const list = await request('tools/list', {});
-    assert.deepEqual(list.result.tools.map((tool) => tool.name), ['dsh_execute', 'dsh_answer', 'dsh_status']);
+    assert.deepEqual(list.result.tools.slice(0,3).map((tool) => tool.name), ['dsh_execute', 'dsh_answer', 'dsh_status']);
+    assert.ok(list.result.tools.some(tool=>tool.name==='dsh_task_submit'));
     return api;
   }
   t.after(async () => {
