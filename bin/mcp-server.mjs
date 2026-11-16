@@ -580,10 +580,10 @@ async function requestDsh({ route, method, body, timeoutMs }) {
 
 const taskCalls = new Map();
 for(const action of taskActions) {
-  TOOLS.push({name:'dsh_task_'+action,description:'持久化任务 '+action+'；submit 幂等提交，get/list/events 查询，cancel 请求停止，reconcile 只对账，answer 回答本次提问。',inputSchema:{type:'object',properties: action==='submit' ? {goal:{type:'string'},plan:{type:'string'},acceptance:{type:'array',items:{type:'string'}},cwd:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'},verificationProfile:{type:'string'},review:{type:'boolean'}} : {taskId:{type:'string'},idempotencyKey:{type:'string'},goal:{type:'string'},runId:{type:'string'},requestId:{type:'string'},answers:{type:'array',items:{type:'object'}},cursor:{type:'integer'},limit:{type:'integer'}},required:action==='submit'?['goal','idempotencyKey']:action==='list'?[]:['taskId'],additionalProperties:false}});
+  TOOLS.push({name:'dsh_task_'+action,description:'持久化任务 '+action+'；submit 幂等提交，get/list/events 查询，cancel 请求停止，reconcile 对账并补发已请求的取消（不重派任务），answer 回答本次提问。',inputSchema:{type:'object',properties: action==='submit' ? {goal:{type:'string'},plan:{type:'string'},acceptance:{type:'array',items:{type:'string'}},cwd:{type:'string'},idempotencyKey:{type:'string'},timeoutMs:{type:'integer'},verificationProfile:{type:'string'},review:{type:'boolean'}} : {taskId:{type:'string'},idempotencyKey:{type:'string'},goal:{type:'string'},runId:{type:'string'},requestId:{type:'string'},answers:{type:'array',items:{type:'object'}},cursor:{type:'integer'},limit:{type:'integer'}},required:action==='submit'?['goal','idempotencyKey']:action==='list'?[]:['taskId'],additionalProperties:false}});
 }
 async function callTask(action,args) {
-  const {response,parsed}=await requestDsh({route:TASK_PATH,method:'POST',body:{...requireObject(args??{},'arguments'),action},timeoutMs:action==='answer'?CONFIG.timeoutMs+10000:10000});
+  const {response,parsed}=await requestDsh({route:TASK_PATH,method:'POST',body:{...requireObject(args??{},'arguments'),action},timeoutMs:action==='answer'?CONFIG.timeoutMs+10000:['cancel','reconcile'].includes(action)?25000:10000});
   if(response.status<200||response.status>=300||parsed.json?.ok!==true||!Object.hasOwn(parsed.json,'value'))return errorResult(failureDetail(parsed.json,'任务请求失败'));
   return toTextResult(JSON.stringify(parsed.json.value));
 }

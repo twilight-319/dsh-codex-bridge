@@ -2,9 +2,9 @@
 
 Beta 1 候选实现，保留 1.x 三个 MCP 工具。新增持久化任务接口、幂等、取消与对账、验证证据，以及显式驱动的执行 → 验证 → Codex 审查流程。Windows DSH 真机联调仍是发布门槛，不能用离线测试代替。
 
-## 当前修复候选 2.0.0-beta.1.1
+## 当前修复候选 2.0.0-beta.1.2
 
-原 Beta 1 候选真机验收为 NO-GO。此候选修复 BETA1-01/02/03：有界宿主观察信号、派发后异常的停止证据判定、待答预算取消与资源约束，并隔离旧候选可能提前标记 FAILED 的记录。复验前仍不具备发布通过结论，详见 [复验清单](docs/BETA1_RETEST.md)。
+前两轮候选真机验收仍为 NO-GO。本轮补充 R01/R02/R03：保留原生 aborted 事实，按持久化意图派生取消/超时结果；运行预算先写取消意图再中止；恢复对账补发尚未落实的取消请求。此候选修复 BETA1-01/02/03：有界宿主观察信号、派发后异常的停止证据判定、待答预算取消与资源约束，并隔离旧候选可能提前标记 FAILED 的记录。复验前仍不具备发布通过结论，详见 [复验清单](docs/BETA1_RETEST.md)。
 
 新任务总预算包含人类等待，等待时仍计时；过期会请求取消，未确认停止时保持 RECONCILING。旧三工具的原生提问等待沿用问题 TTL，合法 dsh_answer 获得新的执行预算。观察错误保留在 run.observationError，不再静默折叠为 null。
 
@@ -14,7 +14,7 @@ Beta 1 候选实现，保留 1.x 三个 MCP 工具。新增持久化任务接口
 - `dsh_task_get / list / events`：查询快照、分页列表、增量事件。`events` 使用全局 seq 游标。
 - `dsh_task_answer`：传 `taskId`、`runId`、当前 `requestId` 和 `answers`，继续同一个 Run。
 - `dsh_task_cancel`：取消明确的任务，已请求与确认停止分别记录。旧 `dsh_execute` 的 MCP 取消通知也会转发。
-- `dsh_task_reconcile`：核对绑定会话和本轮终止事件，不重新派发命令。
+- `dsh_task_reconcile`：核对绑定会话和本轮终止事件；存在未完成取消意图时会补发取消并再次观察，不重新派发原任务。
 - `dsh_task_retry`：终结后显式创建修复 Run；传 `taskId`、新 `idempotencyKey`、可选 `goal`。最多两轮修复，历史保留在 `history`，不允许跳过未解决的对账。
 
 ```json
@@ -54,7 +54,7 @@ verificationProfiles:
 
 ## 验证范围
 
-`npm test` 包含新增任务核心、真实 MCP stdio 到本机 HTTP 线路、实际 sessionController 适配器集成测试及原 11 组回归。CI 使用 Windows Node 22/24。安装包继续零运行时依赖、无安装和构建脚本。
+`npm test` 包含两轮验收回归、任务核心、真实 MCP stdio 到本机 HTTP 线路、实际 sessionController 适配器集成测试及原 11 组回归。CI 使用 Windows Node 22/24。安装包继续零运行时依赖、无安装和构建脚本。
 
 Beta 1 发布前仍需在目标 Windows DSH 验证：新建/复用、取消与真实命令停止、连续问答、原生审批后对账、插件重载、日志文件持久化、Codex 审查，以及明确授权的验证能力。通用 DAG、自动并行隔离、长期记忆、智能路由和完整工作台不在本候选范围。
 

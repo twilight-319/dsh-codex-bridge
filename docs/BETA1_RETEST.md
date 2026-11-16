@@ -1,8 +1,35 @@
 # Beta 1 修复候选复验
 
-目标版本：2.0.0-beta.1.1。发布状态仍为 **NO-GO，等待真机复验**。
+目标版本：2.0.0-beta.1.2。发布状态仍为 **NO-GO，等待真机复验**。
 
 原候选 `38b10ad5281e72fc037a8e38c96968601b913dc5` 的验收报告确认三个执行核心缺陷。本次保持原草稿 PR 与分支，修复运行时逻辑并增加安全行为断言；不把候选代码更新视为验收通过。
+
+## 第二轮复验 R01 R02 R03
+
+上一固定候选 `44df53d3725e3f51e2dd6133dbebbb05f73c60a6` 已关闭观察 signal 与 504 互斥原路径。真机继续发现原生结束原因 aborted 的归因错误、运行期预算缺少持久意图，以及崩溃后取消请求未补发。本轮仍只交付修复候选，发布继续 NO-GO。
+
+终止结果统一由 `task-termination.js` 映射，运行期和等待期预算都先提交取消意图，再中止执行。保存 `adapterResult`（适配器返回）、`hostResult/hostStopReason`（实际观察的宿主事实），`result/outcome` 是派生的任务结果。归因依据不再依赖宿主刚好使用 cancelled 字符串。
+
+| 意图与事实 | state | outcome | result.stopReason | 保留的 hostStopReason |
+|---|---|---|---|---|
+| user + aborted + 确认停止 | CANCELLED | cancelled | cancelled | aborted |
+| budget-exhausted + aborted + 确认停止 | FAILED | budget-exhausted | timeout | aborted |
+| 无取消意图 + aborted + 确认停止 | FAILED | aborted | aborted | aborted |
+| 取消已送达但仍运行或有待答 | RECONCILING | 尚未确认终态 | 不冒充停止 | 保留已观察事实 |
+| 本轮真实 completed 与取消竞态 | 按验证结果决定 | completed | completed | completed |
+
+恢复对账先观察。若存在持久取消意图且尚未确认停止，则记录 cancelAttempts、补发取消、再有界观察；发送失败保存 cancelError，下一次对账可重试。相同 Run 的并发对账/取消发送合并为一次在途操作。cancelSentAt 仅表示发送得到响应，不作为进程停止证据。此流程从不重新派发原任务；MCP 的 cancel/reconcile 调用等待上限相应增至 25 秒。
+
+对于前两轮已错误归类的终态：只有持久意图和停止事实均存在时才修正；旧记录缺少预算意图时不依据“现在已经超过 deadline”猜测历史原因。原始事件和事实保留。
+
+新增 `node tools/test-retest-regressions.mjs`：首先在上一候选上重现四条 R01/R02/R03 断言失败，修复后通过，并扩展到 12 项，包括实际 createExecutor 联合超时、aborted 映射、完成竞态、发送失败重试、并发合并、停止前排队阻塞和宿主取消忽略 signal 的有界处理。当前全部 14 组离线回归通过。这些是严格替身/线路测试，不是 Windows DSH 真机结论。
+
+下一轮先复验：
+
+1. 用户取消待答和运行中的实际命令，确认 CANCELLED/cancelled，hostStopReason=aborted 仍可追溯。
+2. 运行中和等待中总预算耗尽，确认取消前已有 budget-exhausted 记录，停止后 FAILED/budget-exhausted、result.stopReason=timeout。
+3. 在取消意图落盘后、宿主 cancel 前中断，恢复对账补发取消；失败时不释放同项目资格，再次对账可推进。
+4. 取消与真实 completed 竞态保留完成事实；之后再完成文件 profile、产物哈希、Codex approve、原生审批和回退演练。
 
 ## 变更与判定
 
