@@ -274,3 +274,19 @@ test('explicit cancellation preserves user edits after a partial integration and
   assert.equal(await readFile(join(f.cwd,'a.txt'),'utf8'),'user took over')
   assert.equal(f.manager.get(root.taskId).run.rollbackIncomplete,true)
 })
+
+
+test('visual quality requirements reach isolated nodes and survive node repair',async t=>{
+  const f=await fixture(t,async({input,calls})=>{
+    assert.ok(input.task.includes('主体特征、姿态'))
+    assert.ok(input.task.includes('不运行测试'))
+    if(calls.length===1)return{stopReason:'error'}
+    await writeFile(join(input.cwd,'a.txt'),'visual done')
+  })
+  const root=await f.submit({nodes:[{id:'alpha',goal:'draw',writePaths:['a.txt'],qualityProfile:'visual',acceptance:['不运行测试']}]})
+  await until(()=>f.manager.get(root.taskId).state==='WORKFLOW_PAUSED')
+  await f.manager.repairNode({taskId:root.taskId,nodeId:'alpha',idempotencyKey:'quality-repair'})
+  await until(()=>f.manager.get(root.taskId).state==='REVIEW_REQUIRED')
+  const node=f.manager.get(root.taskId).workflow.nodes[0]
+  assert.equal(f.manager.get(node.childTaskId).qualityProfile,'visual');assert.equal(f.calls.length,2);assert.equal(f.reviews,0)
+})

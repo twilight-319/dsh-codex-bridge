@@ -2,6 +2,8 @@
 import { randomUUID as taskUUID } from 'node:crypto';
 import { TASK_PATH, taskActions } from '../lib/task-api.js';
 import { AWAIT_DEFAULT_MS, AWAIT_MAX_MS, deliveryView } from '../lib/task-delivery.js';
+import { observeTask, OBSERVATION_DEFAULT_MS, OBSERVATION_REQUEST_MS } from '../lib/task-observer.js';
+import { QUALITY_PROFILES } from '../lib/task-quality.js';
 // Codex → DSH 反向桥：MCP stdio 服务端（零依赖，只用 node: 内置模块）。
 //
 // 角色：**Codex CLI（GPT）作为 MCP 客户端** spawn 本进程；本进程只做两件事：
@@ -584,9 +586,10 @@ async function requestDsh({ route, method, body, timeoutMs, signal }) {
 const taskCalls = new Map();
 const field = (type, description) => ({type, ...(description ? {description}: {})});
 const tuningSchema={type:'object',properties:{modelMode:field('string','manual或auto；auto与显式provider/model冲突'),effortMode:field('string','manual或auto；auto与显式reasoningEffort冲突'),timeoutMode:field('string','manual或auto；auto与显式timeoutMs冲突'),taskClass:field('string','历史分组的小写类别ID，如backend-change'),objective:field('string','quality/speed/balanced；根据用户模型池标签选取，不猜测模型名称')} ,additionalProperties:false};
-const workflowNodeSchema={type:'object',properties:{id:field('string'),goal:field('string'),dependsOn:{type:'array',items:{type:'string'}},writePaths:{type:'array',items:{type:'string'},description:'仓库内明确文件或目录，不支持通配符；只读节点使用空数组。'},plan:field('string'),acceptance:{type:'array',items:{type:'string'}},verificationProfile:field('string')},required:['id','goal','writePaths'],additionalProperties:false};
+const qualityProfileSchema={type:'string',enum:QUALITY_PROFILES,description:'可选交付要求：visual用于视觉/动画，implementation用于代码实现；保留用户限制，不授权测试或额外模型调用。'};
+const workflowNodeSchema={type:'object',properties:{id:field('string'),goal:field('string'),dependsOn:{type:'array',items:{type:'string'}},writePaths:{type:'array',items:{type:'string'},description:'仓库内明确文件或目录，不支持通配符；只读节点使用空数组。'},plan:field('string'),acceptance:{type:'array',items:{type:'string'}},qualityProfile:qualityProfileSchema,verificationProfile:field('string')},required:['id','goal','writePaths'],additionalProperties:false};
 const taskSchemas = {
-  submit: [{executionMode:{type:'string',enum:['direct','planned','reviewed'],description:'默认direct直接执行；planned使用调用方已有计划；reviewed执行后调用Codex审查。不要为简单任务扩展需求。'},provider:field('string','与model成对；必须属于用户授权候选'),model:field('string'),reasoningEffort:field('string','精确档位ID，如max；仅用户允许且模型支持时可选，不能总是省略而声称自动调优'),reason:field('string','解释模型/档位选择，最多500字符'),tuning:tuningSchema,goal:field('string'),plan:field('string'),acceptance:{type:'array',items:{type:'string'}},cwd:field('string'),idempotencyKey:field('string'),timeoutMs:field('integer','后台总预算，默认30分钟，宿主可配置，硬上限2小时；不是本次HTTP等待时间。'),verificationProfile:field('string'),review:field('boolean')},['goal','idempotencyKey']],
+  submit: [{executionMode:{type:'string',enum:['direct','planned','reviewed'],description:'默认direct直接执行；planned使用调用方已有计划；reviewed执行后调用Codex审查。不要为简单任务扩展需求。'},provider:field('string','与model成对；必须属于用户授权候选'),model:field('string'),reasoningEffort:field('string','精确档位ID，如max；仅用户允许且模型支持时可选，不能总是省略而声称自动调优'),reason:field('string','解释模型/档位选择，最多500字符'),tuning:tuningSchema,goal:field('string'),plan:field('string','必要的一次性制作/实现说明；视觉任务可用planned保留构图、比例和动作方案，不需要先遍历项目。'),acceptance:{type:'array',items:{type:'string'},description:'交付要求，与是否运行测试分开；不要因不测试而省略主体、动作、行为等要求。'},qualityProfile:qualityProfileSchema,cwd:field('string'),idempotencyKey:field('string'),timeoutMs:field('integer','后台总预算，默认30分钟，宿主可配置，硬上限2小时；不是本次HTTP等待时间。'),verificationProfile:field('string'),review:field('boolean')},['goal','idempotencyKey']],
   get: [{taskId:field('string')},['taskId']],
   list: [{cursor:field('integer'),limit:field('integer'),rootsOnly:field('boolean','只列出独立任务与协作父任务；子任务通过父任务查看。')},[]],
   events: [{taskId:field('string'),cursor:field('integer')},['taskId']],
@@ -618,6 +621,28 @@ for(const action of taskActions) {
   properties.detail={type:'string',enum:['summary','full'],description:'默认summary精简交付；完整任务与审计按需full。'};
   const readOnly=['preview','get','list','events','wait','await','maintenance_status'].includes(action);
   TOOLS.push({name:'dsh_task_'+action,description:taskDescriptions[action] ?? ('持久化任务 '+action+'；取消必须等待停止证据，对账不重派原任务。'),annotations:{readOnlyHint:readOnly,destructiveHint:!readOnly,openWorldHint:!readOnly},inputSchema:{type:'object',properties,required,additionalProperties:false}});
+}
+// Client-side observation is deliberately absent from taskActions/HTTP dispatch.
+// It can work with an existing host that already supports the await route.
+TOOLS.push({name:'dsh_task_observe',description:'首选任务观察：一次MCP调用内由程序续等，默认10分钟，每次HTTP最多55秒；只在完成、需人工处理或总观察窗口到期时返回，不提交/重试任务。functions.exec外层须显式yield_time_ms=620000；如返回运行cell，用functions.wait同样延长yield，勿每10秒唤醒模型。客户端仍可能限制外层等待，不能保证零唤醒。',annotations:{readOnlyHint:true,destructiveHint:false,openWorldHint:false},inputSchema:{type:'object',properties:{taskId:field('string'),runId:field('string'),observationMs:field('integer','0~600000，默认600000；只控制本次观察，不是执行预算。'),requestWaitMs:field('integer','1000~55000，默认55000；HTTP续等在程序内完成。'),detail:{type:'string',enum:['summary','full']}},required:['taskId'],additionalProperties:false}});
+async function callObserve(args,signal) {
+  const input=requireObject(args??{},'arguments');
+  if(Object.keys(input).some(k=>!['taskId','runId','observationMs','requestWaitMs','detail'].includes(k)))throw new InvalidParams('未知观察字段。');
+  const {detail='summary',...options}=input;
+  if(!['summary','full'].includes(detail))throw new InvalidParams('detail必须summary/full');
+  let lastError;
+  try {
+    const result=await observeTask({...options,signal},async(wait,waitSignal)=>{
+      const reply=await callTask('await',{...wait,detail:'full'},waitSignal);
+      if(reply.isError){lastError=reply;throw new Error('observe-http-failed');}
+      return JSON.parse(reply.content[0].text);
+    });
+    const view=deliveryView('await',result,detail);
+    return toTextResult(JSON.stringify({...view,observation:result.observation}));
+  }catch(error){
+    if(signal?.aborted)throw error;
+    return lastError??errorResult(String(error.message));
+  }
 }
 async function callTask(action,args,signal) {
   const {detail='summary',...input}=requireObject(args??{},'arguments');
@@ -836,6 +861,7 @@ async function callStatus() {
       url,
       tokenSource: tokenInfo.source,
       dsh: parsed.json ?? {},
+      observation: { tool:'dsh_task_observe', defaultObservationMs:OBSERVATION_DEFAULT_MS, requestWaitMs:OBSERVATION_REQUEST_MS, outerYieldTimeMs:620000, clientLongWaitSupport:'not-negotiated', controlsOuterExecutor:false },
     };
     // 状态调用成功时**不是** isError：这是正常的连通性回答。
     return toTextResult(JSON.stringify(summary, null, 2));
@@ -880,7 +906,7 @@ async function handleRequest(message) {
           '先用dsh_status确认本机DSH连接与用户模型政策。',
           '用dsh_task_submit持久化委派，简单任务direct，已有计划planned，需要额外Codex审查才reviewed；不要默认扩展用户需求。',
           '独立分工有收益的大任务用dsh_task_orchestrate一次提交依赖和修改范围，在隔离Git worktree中运行最多两个DSH执行者，共享父时限和修复次数；用父taskId等待、回答、取消和对账，失败只repair_node。',
-          '优先dsh_task_await等待完成或需要处理，普通进度不返回；客户端调用预算须覆盖waitMs加10秒，不支持长调用时waitMs=55000。等待过期不取消或重派后台任务。',
+          '优先dsh_task_observe：MCP程序内续等，默认10分钟；经functions.exec调用必须显式yield_time_ms=620000，若返回运行cell，functions.wait也用长yield。两层预算独立，客户端可能限制外层，不能声称零唤醒。观察过期只续等同一taskId/runId，不重派。',
           '默认返回精简摘要，完整审计按需detail=full。WAITING_INPUT使用最新runId/requestId回答；原生审批由用户处理；不确定结果先对账。',
           '模型、档位与权限仅限用户授权，显式选择和同项auto不能并用。未知用量不推算费用或订阅额度。',
           '旧dsh_execute/dsh_answer仅作短步骤兼容，600秒到期会请求停止，不承接复杂长任务。',
@@ -900,19 +926,19 @@ async function handleRequest(message) {
       if (typeof name !== 'string' || !name.trim()) {
         throw new InvalidParams('tools/call 缺少 name（必须是字符串）');
       }
-      if(name.startsWith('dsh_task_') && taskActions.includes(name.slice(9))) {
+      if(name==='dsh_task_observe' || name.startsWith('dsh_task_') && taskActions.includes(name.slice(9))) {
         // Async answer/wait cancellation ends the client request only. Explicit
         // dsh_task_cancel is the sole way to cancel an admitted async task.
-        const action=name.slice(9), observer=['await','wait'].includes(action);
+        const action=name.slice(9), observer=['observe','await','wait'].includes(action);
         const controller=observer?new AbortController():null;
         let heartbeat;
         if(controller)taskCalls.set(id,{observer:controller});
-        if(action==='await' && ['string','number'].includes(typeof p._meta?.progressToken)) {
+        if(['observe','await'].includes(action) && ['string','number'].includes(typeof p._meta?.progressToken)) {
           let ticks=0;
           heartbeat=setInterval(()=>writeFrame({jsonrpc:'2.0',method:'notifications/progress',params:{progressToken:p._meta.progressToken,progress:++ticks,message:'等待DSH任务完成；后台任务继续运行。'}}),20000);
           heartbeat.unref?.();
         }
-        try { writeResult(id,await callTask(action,p.arguments,controller?.signal)); }
+        try { writeResult(id,await (action==='observe'?callObserve(p.arguments,controller?.signal):callTask(action,p.arguments,controller?.signal))); }
         catch(error) { if(controller?.signal.aborted)writeResult(id,errorResult('本次等待已取消；后台DSH任务继续。'));else throw error; }
         finally { clearInterval(heartbeat);if(controller)taskCalls.delete(id); }
         return;

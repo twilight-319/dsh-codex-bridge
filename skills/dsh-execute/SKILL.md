@@ -9,9 +9,13 @@ description: Delegate local file edits and commands to DeepSeek Harness through 
 
 ## 选择参与程度
 
-- 简单、范围明确的任务：`executionMode=direct`，保留用户目标和约束，让 DSH 自主执行。不为了委派而先研究整个项目，也不默认添加功能。
+- 简单、范围明确且交付标准客观的任务：`executionMode=direct`，保留用户目标和约束，让 DSH 自主执行。不为了委派而先研究整个项目，也不默认添加功能。
 - 确实需要 Codex 方案：先做一次必要规划，使用 `executionMode=planned`，把已有方案放入 `plan`，交给 DSH 连续完成，避免双方重复完整调查。
 - 用户要求或复杂任务确实需要额外审查：`executionMode=reviewed`。它会在执行后再调用 Codex，增加用量和耗时。没有审查需要时不选该模式。
+
+短小且主要依赖视觉设计判断的任务，不承诺委派更省或更好。用户未明确指定 DSH 时优先由当前 Codex 直接完成；用户已指定 DSH 则照做，不擅自改执行者。视觉/动画即使只有一个文件，也应先用简短的一次性制作说明确定构图、主体特征与比例、动作接触关系，使用 `planned` 携带 `plan`、`qualityProfile=visual` 和几条交付条件；不要先研究整个项目。普通实现可按需用 `qualityProfile=implementation`。
+
+“不测试”与“没有交付标准”是两件事。保留用户明确需求，不扩写成无关功能；不要把“不测试”自行扩大成额外限制。不得为了美化状态启动浏览器、命令或模型验收。`qualityProfile` 仅提供制作要求，不改变模型档位，不触发审查，也不证明审美达标。只在用户模型政策允许时调整模型/档位，不默认拉高到 max。
 
 三种模式都由 DSH 执行，不会消除当前 Codex 的初始参与。用户明确不要求测试时，不增加验证命令或模型审查；如实交付未验证状态。
 
@@ -31,11 +35,25 @@ description: Delegate local file edits and commands to DeepSeek Harness through 
 
 使用 `dsh_task_submit`，准备绝对 `cwd`、稳定的 `idempotencyKey`、简洁自包含的 `goal`，必要时附 `plan` 和 `acceptance`。目标、计划、验收要求合计最多20000字符，三者都会传给执行者。用户要求、必要实现和可选增强要分清，可选增强按用户选择加入。
 
-记录返回的 `taskId/activeRunId`，优先调用 `dsh_task_await`。本插件包装已配置 `tool_timeout_sec=620`，对应 `waitMs=600000`；只有实际客户端支持该时长时使用。手工配置或未知客户端用 `waitMs=55000`，并说明兼容等待仍有调用开销。
+记录返回的 `taskId/activeRunId`，首选 **`dsh_task_observe`**，传同一 `taskId/runId`。默认总观察600000ms，MCP程序内每次HTTP最多等待55000ms；HTTP等待到期由程序续等，不交回模型。任务预算与观察窗口分开；完成、问题、审批、对账、Run变化、宿主关闭、连接错误或总观察到期才返回。
 
-`await`忽略普通进度，只在完成、需要回答、审批、对账或等待到期时返回。等待过期继续等同一任务，禁止重新提交。取消等待、断开连接不取消后台任务；明确停止时才调用 `dsh_task_cancel` 并核对停止事实。
+**有两层等待预算，必须都处理：** `.mcp.json` 的 `tool_timeout_sec=620` 只配置MCP调用；`functions.exec` 默认提前返回运行cell会再次唤醒模型，不能靠MCP设置消除。使用当前环境公开支持的外层等待参数，显式延长 `exec` 的 yield；若仍返回cell，后续 `functions.wait` 也显式延长，保留同一cell，不重新执行工具。支持以下参数的环境示例：
 
-默认结果为精简摘要。普通等待期间不要反复调用 `get/events` 或扫描目录；仅排查异常时读取。若当前执行环境支持程序化工具编排，可以在程序内处理重复等待，将模型参与集中在需要判断时；不要假称具备未验证的后台唤醒能力。
+```javascript
+// @exec: {"yield_time_ms": 620000, "max_output_tokens": 2200}
+const result = await tools.mcp__dsh_bridge__dsh_task_observe({
+  taskId: "task-原任务", runId: "run-原运行", observationMs: 600000
+});
+for (const item of result.content ?? []) if (item.type === "text") text(item.text);
+```
+
+若返回 `Script running with cell ID ...`，仅对该cell调用 `functions.wait`，显式设置其 `yield_time_ms` 为环境允许的长等待值（支持时620000），不要用1000/10000ms连续短等。外层可能钳制时长或中断；插件无法强制控制它，状态中 `clientLongWaitSupport=not-negotiated` 不代表已确认支持。不能声称“零唤醒”“零Codex额度”。遵守当前环境的响应/进度要求，有唤醒就如实计入开销。
+
+`observation-expired`：继续观察同一任务，不重新提交。`run-changed`：先核对新的运行，不能无声追随。连接错误保留原凭据，不重复提交。工具取消或断开只结束本次观察，不取消后台任务；明确停止才调用 `dsh_task_cancel` 并核对停止事实。
+
+`observe` 缺失时说明包装版本未更新，可退到已有 `dsh_task_await`，不是旧同步execute。已知客户端只能短调用时，用 `await(waitMs=55000)` 并如实说明协调开销；不要仅因不确定就默认每55秒返回模型。异步路由缺失必须报告双端不匹配。
+
+默认结果为精简摘要。普通等待不反复调用 `get/events`、扫描目录或复述预计功能。不要在观察循环里输出每次HTTP超时的完整快照；由程序等待，把模型参与留给需要判断的状态。
 
 - `WAITING_INPUT`：呈现当前问题，使用最新 `runId/requestId` 调用 `dsh_task_answer` 后继续等待。
 - `WAITING_APPROVAL`：用户到 DSH 原生会话处理，再对账，不代替用户批准。
@@ -43,7 +61,7 @@ description: Delegate local file edits and commands to DeepSeek Harness through 
 - `WORKFLOW_PAUSED`：定位失败节点并按全图修复上限处理；集成冲突保留原文件。
 - `REVIEW_REQUIRED`：检查 `executionCompleted/verification/review`。执行完成但未验证时可以如实交付，不为改变状态而额外审查或修改。
 
-仅需完整审计、未截断结果或调优依据时用 `dsh_task_get` 的 `detail=full`。默认摘要会标明文本是否截断。`usage`来自 DSH 真实事件；外部 Codex 规划/协调用量未知，不推算订阅额度。
+仅需完整审计、未截断结果或调优依据时用 `dsh_task_get` 的 `detail=full`。默认摘要会标明文本是否截断。`usage`来自 DSH 真实事件；外部 Codex 规划/协调用量未知，不推算订阅额度。交付时说明是否验证，不能把文件存在、执行完成或质量要求已传递描述成质量验收通过。
 
 ## 政策与兼容
 

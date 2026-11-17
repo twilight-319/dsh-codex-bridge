@@ -1416,7 +1416,7 @@ window.__ModuleLoader__.load({
       var errorState = useState(''), error = errorState[0], setError = errorState[1]
       var busyState = useState(false), busy = busyState[0], setBusy = busyState[1]
       var formState = useState(false), showForm = formState[0], setShowForm = formState[1]
-      var draftState = useState({goal:'',cwd:'',plan:'',acceptance:'',seconds:'',executionMode:'direct',verificationProfile:'',provider:'',model:'',reasoningEffort:'',reason:'',taskClass:'',objective:'balanced',autoModel:false,autoEffort:false,autoTimeout:false}), draft = draftState[0], setDraft = draftState[1]
+      var draftState = useState({goal:'',cwd:'',plan:'',acceptance:'',seconds:'',executionMode:'direct',qualityProfile:'',verificationProfile:'',provider:'',model:'',reasoningEffort:'',reason:'',taskClass:'',objective:'balanced',autoModel:false,autoEffort:false,autoTimeout:false}), draft = draftState[0], setDraft = draftState[1]
       var filterState = useState(''), filter = filterState[0], setFilter = filterState[1]
       var pageState = useState(0), pageCursor = pageState[0], setPageCursor = pageState[1]
       var historyState = useState(''), historyId = historyState[0], setHistoryId = historyState[1]
@@ -1459,6 +1459,7 @@ window.__ModuleLoader__.load({
         if(!submissionKey.current)submissionKey.current=crypto.randomUUID()
         var input={goal:draft.goal,cwd:draft.cwd||undefined,executionMode:draft.executionMode,acceptance:draft.acceptance.split('\n').filter(Boolean),idempotencyKey:submissionKey.current}
         if(draft.executionMode!=='direct' && draft.plan.trim())input.plan=draft.plan
+        if(draft.qualityProfile)input.qualityProfile=draft.qualityProfile
         if(draft.seconds!=='' && !draft.autoTimeout)input.timeoutMs=Number(draft.seconds)*1000
         if(draft.provider&&!draft.autoModel){input.provider=draft.provider;input.model=draft.model}
         if(draft.reasoningEffort&&!draft.autoEffort)input.reasoningEffort=draft.reasoningEffort
@@ -1496,6 +1497,8 @@ window.__ModuleLoader__.load({
         h('label',null,'任务目标',h('textarea',{required:true,maxLength:20000,value:draft.goal,onChange:function(e){field('goal',e.target.value)}})),
         h('label',null,'执行模式',h('select',{value:draft.executionMode,onChange:function(e){field('executionMode',e.target.value)}},Object.keys(modeLabels).map(function(mode){return h('option',{key:mode,value:mode},modeLabels[mode])}))),
         h('p',{className:'cbt-muted'},draft.executionMode==='direct'?'适合简单任务，交给 DSH 完成。':draft.executionMode==='planned'?'使用你提供的计划，由 DSH 完整执行。':'DSH 执行完成后，额外调用 Codex 审查，增加模型用量与耗时。'),
+        h('label',null,'交付要求',h('select',{value:draft.qualityProfile,onChange:function(e){field('qualityProfile',e.target.value)}},h('option',{value:''},'沿用任务说明'),h('option',{value:'visual'},'视觉与动画'),h('option',{value:'implementation'},'代码实现'))),
+        h('p',{className:'cbt-muted'},'交付要求不增加测试或模型审查；未验收的结果会保留未验证状态。'),
         h('label',null,'工作目录',h('input',{value:draft.cwd,placeholder:'留空使用宿主默认目录',onChange:function(e){field('cwd',e.target.value)}})),
         h('details',{open:draft.executionMode==='planned'},h('summary',null,'计划与验收条件'),draft.executionMode!=='direct'?h('label',null,'已有计划',h('textarea',{required:draft.executionMode==='planned',maxLength:20000,value:draft.plan,onChange:function(e){field('plan',e.target.value)}})):null,h('label',null,'验收条件（每行一项）',h('textarea',{value:draft.acceptance,onChange:function(e){field('acceptance',e.target.value)}}))),
         h('div',{className:'cbt-row'},h('label',null,'总预算（秒，包含等待）',h('input',{type:'number',min:1,max:7200,placeholder:'留空使用服务端默认',disabled:draft.autoTimeout,value:draft.seconds,onChange:function(e){field('seconds',e.target.value)}})),
@@ -1521,7 +1524,7 @@ window.__ModuleLoader__.load({
           task.parentTaskId?button('返回协作任务',function(){choose(task.parentTaskId)},busy):null),
         task.state==='WAITING_APPROVAL'?h('p',{className:'cbt-notice'},'请打开原生会话处理审批，然后对账。不要重新提交原任务。'):null,
         ['RECONCILING','CANCEL_REQUESTED'].includes(task.state)?h('p',{className:'cbt-notice'},task.kind==='workflow'?'协作任务保留当前现场，请核对节点状态或集成冲突后再对账。原项目的后续写任务继续等待。':'停止尚未确认。同项目任务将继续等待；对账可能补发已经请求的取消。'):null,
-        task.plan?h('details',null,h('summary',null,'计划与验收条件'),h('pre',null,task.plan),h('ul',null,(task.acceptance||[]).map(function(a,i){return h('li',{key:i},a)}))):null,
+        (task.plan||(task.acceptance||[]).length||task.qualityProfile)?h('details',null,h('summary',null,'计划与验收条件'),task.qualityProfile?h('p',null,'交付要求：'+(task.qualityProfile==='visual'?'视觉与动画':'代码实现')):null,task.plan?h('pre',null,task.plan):null,h('ul',null,(task.acceptance||[]).map(function(a,i){return h('li',{key:i},a)}))):null,
         h('nav',{className:'cbt-row','aria-label':'运行历史'},button('当前运行',function(){setHistoryId('')},!historyId),(task.history||[]).map(function(item){return button('Run '+item.attempt,function(){setHistoryId(item.runId)},false,{key:item.runId,'aria-pressed':historyId===item.runId})})),
         h('dl',null,h('dt',null,'执行结果'),h('dd',null,run.outcome||'尚未确认'),h('dt',null,'宿主结束原因'),h('dd',null,run.hostStopReason||'未记录'),h('dt',null,'验收状态'),h('dd',null,run.verification&&run.verification.status||'未记录'),h('dt',null,'执行模型'),h('dd',null,run.execution&&run.execution.selection?run.execution.selection.provider+'/'+run.execution.selection.model:'未记录'),h('dt',null,'Run'),h('dd',null,run.runId||'未记录')),
         run.tuning?h('details',null,h('summary',null,'任务调优 · 请求 / 建议 / 冻结 / 应用 / 实际证据'),h('pre',null,JSON.stringify(run.tuning,null,2))):null,

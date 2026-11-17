@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 let plugin,mounted,current,hook=0,effects=[],uuid=0,failSubmit=true
 const cells=new Map(),requests=[],timers=new Map()
 const sample={taskId:'task-current',goal:'修复构建并核对产物',cwd:'D:/project',state:'REVIEW_REQUIRED',revision:7,activeRunId:'run-current',history:[{runId:'run-old',attempt:1,outcome:'error',result:{text:'先前失败'}}],run:{runId:'run-current',attempt:2,sessionId:'session-live',outcome:'completed',hostStopReason:'completed',evidenceHash:'evidence-7',verification:{status:'passed',checks:[{kind:'file',path:'dist/app.js',passed:true}],artifacts:[{path:'dist/app.js',bytes:17,hash:'hash'}]},review:{verdict:'approve',summary:'已核对'},result:{text:'构建产物已生成'}}}
+sample.acceptance=['主体识别清楚'];sample.qualityProfile='visual'
 let task=structuredClone(sample)
 const React={
  Fragment:'fragment',createElement:(type,props,...children)=>({type,props:props||{},children}),
@@ -45,6 +46,8 @@ tree=view();await flush();tree=view()
 assert.equal(requests.filter(r=>['submit','cancel','review','answer','importLegacy','retry'].includes(r.action)).length,0,'mount must be read-only')
 walk(tree).find(n=>n.props.className?.includes('cbt-task')).props.onClick();await flush();tree=view();await flush();tree=view()
 assert.ok(JSON.stringify(tree).includes('hash'))
+assert.ok(JSON.stringify(tree).includes('主体识别清楚'),'criteria must display without a plan')
+assert.ok(JSON.stringify(tree).includes('视觉与动画'))
 assert.equal(button(tree,'接受当前结果').props.disabled,true)
 const check=walk(tree).find(n=>n.type==='input'&&n.props.type==='checkbox');check.props.onChange({target:{checked:true}});tree=view()
 button(tree,'接受当前结果').props.onClick();await flush();tree=view()
@@ -53,11 +56,12 @@ button(tree,'Run 1').props.onClick();tree=view();assert.ok(JSON.stringify(tree).
 button(tree,'当前运行').props.onClick();tree=view()
 button(tree,'创建修复 Run').props.onClick();await flush();tree=view();button(tree,'刷新').props.onClick();await flush();tree=view();await flush();tree=view();assert.equal(button(tree,'创建修复 Run').props.disabled,false);button(tree,'创建修复 Run').props.onClick();await flush();tree=view();const retries=requests.filter(r=>r.action==='retry');assert.equal(retries.length,2);assert.equal(retries[0].idempotencyKey,retries[1].idempotencyKey)
 button(tree,'新建任务').props.onClick();tree=view()
+walk(tree).find(n=>n.type==='select'&&n.children.some(child=>child&&child.props&&child.props.value==='visual')).props.onChange({target:{value:'visual'}});tree=view()
 const goal=walk(tree).find(n=>n.type==='textarea'&&n.props.required);goal.props.onChange({target:{value:'幂等提交'}});tree=view()
 assert.ok(walk(tree).some(n=>n.type==='input'&&n.props.type==='number'&&n.props.max===7200));walk(tree).find(n=>n.type==='input'&&n.props.placeholder==='例如 max，须获授权').props.onChange({target:{value:'max'}});tree=view();
 walk(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await flush();tree=view();assert.ok(JSON.stringify(tree).includes('test-key-2'))
 walk(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await flush();tree=view()
-const submits=requests.filter(r=>r.action==='submit');assert.equal(submits.length,2);assert.equal(submits[0].idempotencyKey,submits[1].idempotencyKey);assert.equal(submits[0].timeoutMs,undefined);assert.equal(submits[0].reasoningEffort,'max');assert.equal(submits[0].executionMode,'direct');assert.equal(submits[0].review,undefined);assert.equal(submits[0].plan,undefined)
+const submits=requests.filter(r=>r.action==='submit');assert.equal(submits.length,2);assert.equal(submits[0].idempotencyKey,submits[1].idempotencyKey);assert.equal(submits[0].timeoutMs,undefined);assert.equal(submits[0].reasoningEffort,'max');assert.equal(submits[0].executionMode,'direct');assert.equal(submits[0].qualityProfile,'visual');assert.equal(submits[0].review,undefined);assert.equal(submits[0].plan,undefined)
 button(tree,'诊断').props.onClick();await flush();tree=view();assert.ok(JSON.stringify(tree).includes('not-verified'))
 // Refresh picks up a real question; selected labels and current requestId are sent together.
 task={...task,state:'WAITING_INPUT',run:{...task.run,question:{requestId:'latest-question',questions:[{id:'q',question:'选择继续方式',options:[{label:'继续'},{label:'停止'}]}]}}}

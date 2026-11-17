@@ -1,6 +1,6 @@
 # 给其他人安装 Codex 执行桥
 
-无需npm发布。此仓库同时是DSH插件和Codex marketplace，两边各安装一次。当前DSH源码为2.0.0-rc.4开发候选，Codex包装插件版本0.7.0；尚未通过稳定版发布验收；两个版本号不同不代表不匹配。
+无需npm发布。此仓库同时是DSH插件和Codex marketplace，两边各安装一次。当前DSH源码为2.0.0-rc.5开发候选，Codex包装插件版本0.8.0；尚未通过稳定版发布验收；两个版本号不同不代表不匹配。
 
 ## 前置条件
 
@@ -29,7 +29,7 @@ codex plugin add dsh-bridge@dsh-bridge
 codex plugin list
 ```
 
-预期出现`dsh-bridge@dsh-bridge`，版本`0.7.0`，已安装且启用。需要固定版本时，把`--ref main`替换为经过验证的完整40位提交SHA；升级跟随所配置ref，固定SHA不会自动跟随main。
+预期出现`dsh-bridge@dsh-bridge`，版本`0.8.0`，已安装且启用。需要固定版本时，把`--ref main`替换为经过验证的完整40位提交SHA；升级跟随所配置ref，固定SHA不会自动跟随main。
 
 **完全退出并重新打开Codex App**。不要同时保留旧的`dsh-bridge@personal`或手工同名`dsh_bridge` MCP配置，否则可能产生重复工具或来源歧义；确认旧来源后仅移除旧DSH桥，不删除其他marketplace或全局配置。
 
@@ -47,7 +47,7 @@ codex plugin remove dsh-bridge@personal
 
 在新Codex会话输入：
 
-> 请加载DSH执行桥技能，先只调用dsh_status检查连接；确认dsh_task_submit、dsh_task_await、dsh_task_orchestrate、dsh_task_repair_node、dsh_task_preview存在，submit支持executionMode、reasoningEffort和tuning。不要创建执行任务，也不要修改配置。检查通过后，单任务使用submit+await；独立分工有收益的大任务才使用orchestrate；不使用旧同步dsh_execute承接长任务。
+> 请加载DSH执行桥技能，先只调用dsh_status检查连接；确认dsh_task_submit、dsh_task_observe、dsh_task_await、dsh_task_orchestrate、dsh_task_repair_node、dsh_task_preview存在，submit支持executionMode、qualityProfile、reasoningEffort和tuning。不要创建执行任务，也不要修改配置。检查通过后，单任务使用submit+observe（经functions.exec时显式延长外层yield，不能只设置MCP超时）；独立分工有收益的大任务才使用orchestrate；不使用旧同步dsh_execute承接长任务。
 
 宿主应可达，模型/权限应是使用者自己的政策。技能加载成功不等于端点可达，工具出现也不等于DSH已运行；分别核对。
 

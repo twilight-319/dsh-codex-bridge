@@ -329,3 +329,52 @@ test('redirects are not followed and POST network failure is never retried', asy
   assert.equal(sink.requests.length, 0, 'no implicit POST replay after rediscovery');
   assert.equal(statusLabel(await api.call()), 'must-not-follow');
 });
+
+
+test('observe keeps HTTP expiries inside one MCP result and preserves full/summary delivery', async t => {
+  const f=await fixture(t)
+  const task={taskId:'observed',activeRunId:'run-one',state:'RUNNING',revision:1,goal:'private-context',run:{verification:{status:'not_configured'}}}
+  const mock=await f.mock('observer',(_req,res)=>{
+    const request=JSON.parse(mock.requests.at(-1).body)
+    assert.equal(request.action,'await');assert.equal(request.taskId,'observed')
+    if(mock.requests.length>1)assert.equal(request.runId,'run-one')
+    const complete=mock.requests.length>=3
+    res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,value:{reason:complete?'settled-or-input':'wait-expired',task:complete?{...task,state:'REVIEW_REQUIRED',run:{...task.run,result:{stopReason:'completed',text:'done'}}}:task}}))
+  })
+  f.publish(mock.origin);const api=await f.client()
+  const tools=(await api.request('tools/list',{})).result.tools
+  assert.equal(tools.find(t=>t.name==='dsh_task_observe').annotations.readOnlyHint,true)
+  assert.ok(tools.find(t=>t.name==='dsh_task_submit').inputSchema.properties.qualityProfile)
+  const result=(await api.request('tools/call',{name:'dsh_task_observe',arguments:{taskId:'observed',requestWaitMs:1000}})).result
+  assert.notEqual(result.isError,true)
+  const view=JSON.parse(result.content[0].text)
+  assert.equal(view.observation.httpAwaitCalls,3);assert.equal(view.task.executionCompleted,true)
+  assert.equal(view.task.goal,undefined);assert.equal(view.task.verification,'not_configured')
+  assert.equal(api.frames.filter(x=>x.id===4).length,1,'one outer MCP response for several HTTP expiries')
+  const full=(await api.request('tools/call',{name:'dsh_task_observe',arguments:{taskId:'observed',runId:'run-one',detail:'full'}})).result
+  assert.equal(JSON.parse(full.content[0].text).task.goal,'private-context')
+})
+
+test('observe cancellation closes only observation and invalid input never reaches host',async t=>{
+  const f=await fixture(t),mock=await f.mock('pending',()=>{})
+  f.publish(mock.origin);const api=await f.client()
+  const waiting=api.request('tools/call',{name:'dsh_task_observe',arguments:{taskId:'known-task'}})
+  for(let i=0;i<100&&!mock.requests.length;i++)await new Promise(r=>setTimeout(r,5))
+  assert.equal(mock.requests.length,1)
+  api.child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/cancelled',params:{requestId:3}})+'\n')
+  assert.equal((await waiting).result.isError,true)
+  assert.deepEqual(mock.requests.map(r=>JSON.parse(r.body).action),['await'])
+  for(const args of [{taskId:'t',observationMs:600001},{taskId:'t',requestWaitMs:1},{taskId:'t',unknown:true}]){
+    const invalid=await api.request('tools/call',{name:'dsh_task_observe',arguments:args})
+    assert.ok(invalid.error||invalid.result.isError)
+  }
+  assert.equal(mock.requests.length,1)
+})
+
+test('observe reports connection failures without hidden retry or task dispatch',async t=>{
+  const f=await fixture(t),mock=await f.mock('dropped',(_req,res)=>res.destroy())
+  f.publish(mock.origin);const api=await f.client()
+  const result=(await api.request('tools/call',{name:'dsh_task_observe',arguments:{taskId:'known-task',runId:'original'}})).result
+  assert.equal(result.isError,true);assert.ok(result.content[0].text.includes('保留原taskId'))
+  assert.equal(mock.requests.length,1);assert.equal(JSON.parse(mock.requests[0].body).action,'await')
+})

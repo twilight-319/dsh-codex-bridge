@@ -125,3 +125,27 @@ test('partial recovered windows retain observed budget bounds without inventing 
   const next=retainUsageBound(bound,addUsageBounds(bound,{modelCalls:1,inputTokens:30,outputTokens:3}))
   assert.equal(next.inputTokens,130);assert.equal(next.modelCalls,2)
 })
+
+
+test('visual requirements persist through idempotent submission without adding review or verification',async t=>{
+  const f=await fixture(t)
+  const raw={executionMode:'planned',plan:'主体比例清楚，脚与脚踏保持接触',qualityProfile:'visual',acceptance:['不运行测试','只交付一个 HTML']}
+  const task=await f.submit(raw);await until(()=>f.calls===1)
+  assert.ok(f.input.task.includes('主体比例清楚'));assert.ok(f.input.task.includes('主体特征、姿态'))
+  assert.ok(f.input.task.includes('不运行测试'));assert.ok(f.input.task.includes('不授权测试'))
+  assert.equal((await f.submit(raw)).taskId,task.taskId)
+  await assert.rejects(f.submit({...raw,qualityProfile:'implementation'}),{code:'idempotency-conflict'})
+  f.complete();const done=(await f.manager.await({taskId:task.taskId,waitMs:1000})).task
+  assert.equal(done.qualityProfile,'visual');assert.equal(f.store.get(task.taskId).qualityProfile,'visual')
+  assert.equal(f.reviewCalls,0);assert.equal(done.run.verification.status,'not_configured')
+  const summary=deliveryView('get',done)
+  assert.deepEqual(summary.deliveryRequirements,{qualityProfile:'visual',acceptanceCount:2,planProvided:true})
+  assert.equal(summary.state,'REVIEW_REQUIRED','quality instructions are not quality approval')
+})
+
+test('unknown quality profiles and oversized quality prompts fail before dispatch',async t=>{
+  const f=await fixture(t)
+  await assert.rejects(f.submit({qualityProfile:'invented'}))
+  assert.throws(()=>executionPrompt({goal:'x'.repeat(19900),qualityProfile:'visual'}),/20000/)
+  assert.equal(f.calls,0)
+})
