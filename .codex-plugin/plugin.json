@@ -1,0 +1,15 @@
+{
+  "name": "dsh-bridge",
+  "version": "0.5.0",
+  "description": "Delegate local execution to DSH using persistent asynchronous tasks, policy-bounded model tuning and native-session evidence.",
+  "author": { "name": "twilight-319" },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DSH 执行桥",
+    "shortDescription": "Codex 规划，DSH 本机执行与验证",
+    "longDescription": "连接同一电脑上运行的 DeepSeek Harness。复杂修改、构建、测试优先异步提交并查询；短步骤保留同步兼容。使用者自行配置 DSH 模型、权限和 Codex 认证；不附带账号或密钥。",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": ["先检查 dsh_status；复杂任务使用 dsh_task_submit 异步提交，再用 dsh_task_wait/get/events 查询，不要默认用旧同步 dsh_execute 承接长任务。"]
+  }
+}

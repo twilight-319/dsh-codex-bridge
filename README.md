@@ -119,7 +119,17 @@ git+https://github.com/twilight-319/dsh-codex-bridge.git#FULL_40_CHARACTER_COMMI
 
 ## 将 MCP 接入 Codex
 
-安装 DSH 插件**不等于**已经给 Codex 注册 MCP。需要在 Codex 的 MCP 设置中添加一个 stdio 服务器：
+安装 DSH 插件**不等于**已经给 Codex 安装执行桥。推荐使用本仓库的公开 Codex marketplace（包含异步技能与自包含MCP，无作者绝对路径，无需npm发布）：
+
+```text
+codex plugin marketplace add https://github.com/twilight-319/dsh-codex-bridge.git --ref main
+codex plugin add dsh-bridge@dsh-bridge
+codex plugin list
+```
+
+然后完全退出并重新打开Codex App，先只调用`dsh_status`。Codex包装插件版本0.5.0，DSH宿主仍为rc.2；详见[完整双端安装、升级与排错](docs/CODEX_INSTALL.md)。旧`dsh-bridge@personal`应确认后单独移除，避免重复服务器。
+
+如果不用插件市场，也可手工在 Codex 的 MCP 设置中添加一个 stdio 服务器（此方式不自动提供技能，不要与上述插件同时注册同名服务器）：
 
 ```json
 {
