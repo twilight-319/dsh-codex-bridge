@@ -23,7 +23,11 @@ if (!process.argv.includes('--child')) {
     async state({ sessionId }) { const s = sessions.get(sessionId); return { cursor: s.seq, active: true, running: s.running, pendingInput: [] } },
     async prompt({ sessionId, content }) {
       prompts++; const s = sessions.get(sessionId); s.running = true; s.reads = 0
-      if (s.mode === 'questions') {
+      if (s.mode === 'usage-questions') {
+        const ask = () => listener({ agent:{id:sessionId}, questions:[{id:'usage-q',question:'continue?',options:[{label:'go'}]}] })
+        const message = count => push(s,'assistant/message',{message:{content:[{type:'text',text:'step'}]},usage:{inputTokens:count,cacheReadTokens:count*2,cacheWriteTokens:0,outputTokens:1,totalTokens:count*3+1}})
+        s.held = (async()=>{message(10);await ask();message(30);await ask();message(50);push(s,'turn/end',{reason:{kind:'completed'}});s.running=false})().catch(()=>{})
+      } else if (s.mode === 'questions') {
         const ask = () => listener({ agent: { id: sessionId }, questions: [{ id: 'same-id', question: '?', options: [{ label: 'A' }, { label: 'B' }] }] })
         s.held = (async () => { await ask(); await ask(); complete(s, 'second-answer-completed') })().catch(() => {})
       } else if (s.mode === 'done') s.nextText = content[0].text
@@ -45,6 +49,16 @@ if (!process.argv.includes('--child')) {
   assert.equal(first.text, 'first')
   const follow = await executor.execute({ sessionId: first.sessionId, task: 'second', timeoutMs: 2000 })
   assert.equal(follow.text, 'second', 'must not return old assistant/turn end')
+  nextMode='usage-questions'
+  const usageSnapshots=[]
+  const usageFirst=await executor.executeTask({task:'usage across questions',cwd:process.cwd(),timeoutMs:2000,onUsage:value=>usageSnapshots.push(value.usage.inputTokens)})
+  assert.equal(usageFirst.usage.inputTokens,10)
+  const usageSecond=await executor.answerTask({sessionId:usageFirst.sessionId,requestId:usageFirst.needsInput.requestId,answers:[{id:'usage-q',selected:['go']}],timeoutMs:2000})
+  assert.equal(usageSecond.usage.inputTokens,30,'answer must exclude prior usage records')
+  const usageThird=await executor.answerTask({sessionId:usageFirst.sessionId,requestId:usageSecond.needsInput.requestId,answers:[{id:'usage-q',selected:['go']}],timeoutMs:2000})
+  assert.equal(usageThird.usage.inputTokens,50)
+  assert.deepEqual(usageSnapshots,[10,30,50],'repeated event history must not double count calls')
+  nextMode='done'
   assert.equal(readSessions()[0].cwd, process.cwd(), 'reuse retains project')
   await assert.rejects(executor.execute({ sessionId: 'not-owned', task: 'x' }), { code: 'session-not-bridge-owned' })
   await assert.rejects(executor.execute({ sessionId: first.sessionId, task: 'x', cwd: process.cwd() }), { code: 'reuse-policy-override' })

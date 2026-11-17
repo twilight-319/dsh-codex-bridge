@@ -388,6 +388,7 @@ export function apply(ctx, config = {}) {
     if (!taskManager) taskManager = createTaskManager({
       store:createTaskStore(join(homedir(),'.dsh','codex-bridge','tasks-v2')),
       executor:getExecutor(), profiles:resolved.verificationProfiles,
+      maxConcurrency:resolved.maxConcurrency,
       taskDefaultTimeoutMs: resolved.taskDefaultTimeoutMs, taskMaxTimeoutMs: resolved.taskMaxTimeoutMs,
       executionPolicy, tuningHistory:resolved.tuningHistory,
       verificationService:(()=>{try{return typeof ctx.get==='function' ? ctx.get('bridgeVerification') : ctx.bridgeVerification}catch{return null}})(),
@@ -395,7 +396,7 @@ export function apply(ctx, config = {}) {
         const result=await runner.consult({prompt:buildPrompt('review',{context:JSON.stringify({goal:task.goal,acceptance:task.acceptance,before:task.run.before,verification:task.run.verification}).slice(0,120000),diff:task.run.after?.diff ?? ''},{cwd:task.cwd,files:'',diff:task.run.after?.diff ?? ''}),schema:SCHEMAS.review,cwd:task.cwd,signal,kind:'review',sessionKey:'task-review|'+task.taskId})
         const parsed=parseAnswer(result.answer)
         if(!parsed.ok) throw new Error('invalid review')
-        return assertResultShape('review',parsed.value)
+        return { ...assertResultShape('review',parsed.value), usage:result.meta?.usage ?? null, elapsedMs:result.meta?.elapsedMs ?? null }
       },
     })
     return taskManager

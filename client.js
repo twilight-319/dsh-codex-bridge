@@ -1416,14 +1416,14 @@ window.__ModuleLoader__.load({
       var errorState = useState(''), error = errorState[0], setError = errorState[1]
       var busyState = useState(false), busy = busyState[0], setBusy = busyState[1]
       var formState = useState(false), showForm = formState[0], setShowForm = formState[1]
-      var draftState = useState({goal:'',cwd:'',plan:'',acceptance:'',seconds:'',review:false,verificationProfile:'',provider:'',model:'',reasoningEffort:'',reason:'',taskClass:'',objective:'balanced',autoModel:false,autoEffort:false,autoTimeout:false}), draft = draftState[0], setDraft = draftState[1]
+      var draftState = useState({goal:'',cwd:'',plan:'',acceptance:'',seconds:'',executionMode:'direct',verificationProfile:'',provider:'',model:'',reasoningEffort:'',reason:'',taskClass:'',objective:'balanced',autoModel:false,autoEffort:false,autoTimeout:false}), draft = draftState[0], setDraft = draftState[1]
       var filterState = useState(''), filter = filterState[0], setFilter = filterState[1]
       var pageState = useState(0), pageCursor = pageState[0], setPageCursor = pageState[1]
       var historyState = useState(''), historyId = historyState[0], setHistoryId = historyState[1]
       var answersState = useState({}), answers = answersState[0], setAnswers = answersState[1]
       var acceptState = useState(false), accepted = acceptState[0], setAccepted = acceptState[1]
       var selected = React.useRef(''), alive = React.useRef(true), generation = React.useRef(0), submissionKey = React.useRef(''), retryKeys = React.useRef({}), eventCursor = React.useRef(0)
-      var labels = {QUEUED:'排队中',RUNNING:'执行中',VERIFYING:'验证中',WAITING_INPUT:'等待回答',WAITING_APPROVAL:'等待原生审批',CANCEL_REQUESTED:'正在确认停止',RECONCILING:'等待对账',REVIEW_REQUIRED:'待人工核对',SUCCEEDED:'验收通过',FAILED:'失败',CANCELLED:'已取消',LEGACY:'旧版只读记录'}
+      var labels = {QUEUED:'排队中',RUNNING:'执行中',VERIFYING:'验证中',WAITING_INPUT:'等待回答',WAITING_APPROVAL:'等待原生审批',WORKFLOW_PAUSED:'协作已暂停',CANCEL_REQUESTED:'正在确认停止',RECONCILING:'等待对账',REVIEW_REQUIRED:'待人工核对',SUCCEEDED:'验收通过',FAILED:'失败',CANCELLED:'已取消',LEGACY:'旧版只读记录',PENDING:'等待依赖',PREPARING:'准备隔离工作区',SUBMITTING:'提交中',ADMITTED:'已接纳',COMPLETED:'节点完成',REPAIRING:'修复中'}
       function request(action, input) {
         var controller = new AbortController(), timer = setTimeout(function(){controller.abort()},25000)
         return fetch('/api/dsh-codex-bridge.v2.task-workbench',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({},input||{},{action:action})),signal:controller.signal})
@@ -1432,7 +1432,7 @@ window.__ModuleLoader__.load({
       }
       function load() {
         var current = selected.current, ticket = ++generation.current
-        return Promise.all([request('list',{cursor:pageCursor,limit:50}), current ? request('get',{taskId:current}) : Promise.resolve(null), current ? request('events',{taskId:current,cursor:eventCursor.current}) : Promise.resolve({events:[]})])
+        return Promise.all([request('list',{cursor:pageCursor,limit:50,rootsOnly:true}), current ? request('get',{taskId:current}) : Promise.resolve(null), current ? request('events',{taskId:current,cursor:eventCursor.current}) : Promise.resolve({events:[]})])
           .then(function(result){if(!alive.current||ticket!==generation.current)return;setListing(result[0]);setTask(result[1]);eventCursor.current=result[2].cursor||eventCursor.current;setEvents(function(previous){var seen=new Set(previous.map(function(item){return item.eventId}));return previous.concat(result[2].events.filter(function(item){return !seen.has(item.eventId)}))});setError('')})
           .catch(function(cause){if(alive.current&&ticket===generation.current)setError('连接或读取失败：'+cause.message+'。保留当前记录，刷新不会重新执行任务。')})
       }
@@ -1441,14 +1441,15 @@ window.__ModuleLoader__.load({
       useEffect(function(){setAccepted(false)},[task&&task.revision,task&&task.run&&task.run.evidenceHash])
       function choose(id){selected.current=id;eventCursor.current=0;setEvents([]);setHistoryId('');setAccepted(false);setTask(null);load()}
       function operate(action,input) {
-        if(action==='retry'){
-          var pending=retryKeys.current[input.taskId]
-          if(!pending)pending=retryKeys.current[input.taskId]={taskId:input.taskId,idempotencyKey:crypto.randomUUID()}
+        var retryKey=input.taskId+(action==='repair_node'?'/'+input.nodeId:'')
+        if(action==='retry'||action==='repair_node'){
+          var pending=retryKeys.current[retryKey]
+          if(!pending)pending=retryKeys.current[retryKey]=Object.assign({},input,{idempotencyKey:input.idempotencyKey||crypto.randomUUID()})
           input=Object.assign({},pending)
         }
         if(busy)return Promise.resolve()
         setBusy(true);setError('')
-        return request(action,input).then(function(result){if(action==='retry')delete retryKeys.current[input.taskId];if(!alive.current)return;if(result&&result.taskId){if(selected.current!==result.taskId){eventCursor.current=0;setEvents([])}selected.current=result.taskId;setTask(result)}if(action==='importLegacy')setDiagnostics(null);return load()})
+        return request(action,input).then(function(result){if(action==='retry'||action==='repair_node')delete retryKeys.current[retryKey];if(!alive.current)return;if(result&&result.taskId){if(selected.current!==result.taskId){eventCursor.current=0;setEvents([])}selected.current=result.taskId;setTask(result)}if(action==='importLegacy')setDiagnostics(null);return load()})
           .catch(function(cause){if(alive.current)setError(cause.message+(action==='submit'?'。提交结果未确认；保留提交编号，重试会关联原任务。':''))})
           .finally(function(){if(alive.current)setBusy(false)})
       }
@@ -1456,7 +1457,8 @@ window.__ModuleLoader__.load({
       function submit(event) {
         event.preventDefault()
         if(!submissionKey.current)submissionKey.current=crypto.randomUUID()
-        var input={goal:draft.goal,cwd:draft.cwd||undefined,plan:draft.plan,acceptance:draft.acceptance.split('\n').filter(Boolean),review:draft.review,idempotencyKey:submissionKey.current}
+        var input={goal:draft.goal,cwd:draft.cwd||undefined,executionMode:draft.executionMode,acceptance:draft.acceptance.split('\n').filter(Boolean),idempotencyKey:submissionKey.current}
+        if(draft.executionMode!=='direct' && draft.plan.trim())input.plan=draft.plan
         if(draft.seconds!=='' && !draft.autoTimeout)input.timeoutMs=Number(draft.seconds)*1000
         if(draft.provider&&!draft.autoModel){input.provider=draft.provider;input.model=draft.model}
         if(draft.reasoningEffort&&!draft.autoEffort)input.reasoningEffort=draft.reasoningEffort
@@ -1476,10 +1478,26 @@ window.__ModuleLoader__.load({
       var terminalTask = task && ['SUCCEEDED','FAILED','CANCELLED','REVIEW_REQUIRED','LEGACY'].includes(task.state)
       var visible = listing.tasks.filter(function(item){return (item.goal+' '+item.cwd+' '+item.taskId).toLowerCase().includes(filter.toLowerCase())})
       function button(text,fn,disabled,extra){return h('button',Object.assign({type:'button',className:'cbt-button',onClick:fn,disabled:disabled},extra||{}),text)}
+      var modeLabels={direct:'直接执行',planned:'按计划执行',reviewed:'执行后审查'}
+      function metric(value){return typeof value==='number'&&Number.isFinite(value)?String(value):'未知'}
+      function seconds(value){return typeof value==='number'&&Number.isFinite(value)?(value/1000).toFixed(1)+' 秒':'未知'}
+      var workflowView=task&&task.kind==='workflow'?h('section',null,h('h3',null,'协作执行'),
+        h('p',null,'阶段：'+task.workflow.phase+' · 最多 '+task.workflow.parallelism+' 个执行者并行 · 已用修复次数 '+task.workflow.repairsUsed+'/'+task.workflow.maxRepairs),
+        h('p',{className:'cbt-muted'},'各节点在隔离工作区执行，依赖满足后启动，完成后检查范围并统一集成。'),
+        h('ol',null,task.workflow.nodes.map(function(node){
+          return h('li',{key:node.id},h('strong',null,node.id+' · '+(labels[node.state==='ADMITTED'?node.childState:node.state]||node.state)),
+            h('p',null,node.goal),h('p',null,'依赖：'+(node.dependsOn.length?node.dependsOn.join('、'):'无')+' · 修改范围：'+(node.writePaths.length?node.writePaths.join('、'):'只读')),
+            node.error?h('p',{role:'alert'},node.error.message):null,
+            h('div',{className:'cbt-row'},node.childTaskId?button('查看子任务 '+node.id,function(){choose(node.childTaskId)},busy):null,
+              node.sessionId?button('打开执行会话 '+node.id,function(){if(nativeOpen)Promise.resolve(nativeOpen(node.sessionId)).catch(function(cause){setError(cause.message)})},!nativeOpen):null,
+              task.state==='WORKFLOW_PAUSED'&&node.state==='FAILED'?button('修复节点 '+node.id,function(){operate('repair_node',{taskId:task.taskId,nodeId:node.id})},busy||(task.workflow.repairsUsed>=task.workflow.maxRepairs&&!retryKeys.current[task.taskId+'/'+node.id])):null))
+        }))):null
       var form = showForm ? h('form',{className:'cbt-form',onSubmit:submit},h('h2',null,'新建任务'),
         h('label',null,'任务目标',h('textarea',{required:true,maxLength:20000,value:draft.goal,onChange:function(e){field('goal',e.target.value)}})),
+        h('label',null,'执行模式',h('select',{value:draft.executionMode,onChange:function(e){field('executionMode',e.target.value)}},Object.keys(modeLabels).map(function(mode){return h('option',{key:mode,value:mode},modeLabels[mode])}))),
+        h('p',{className:'cbt-muted'},draft.executionMode==='direct'?'适合简单任务，交给 DSH 完成。':draft.executionMode==='planned'?'使用你提供的计划，由 DSH 完整执行。':'DSH 执行完成后，额外调用 Codex 审查，增加模型用量与耗时。'),
         h('label',null,'工作目录',h('input',{value:draft.cwd,placeholder:'留空使用宿主默认目录',onChange:function(e){field('cwd',e.target.value)}})),
-        h('details',null,h('summary',null,'计划与验收条件'),h('label',null,'计划',h('textarea',{maxLength:20000,value:draft.plan,onChange:function(e){field('plan',e.target.value)}})),h('label',null,'验收条件（每行一项）',h('textarea',{value:draft.acceptance,onChange:function(e){field('acceptance',e.target.value)}}))),
+        h('details',{open:draft.executionMode==='planned'},h('summary',null,'计划与验收条件'),draft.executionMode!=='direct'?h('label',null,'已有计划',h('textarea',{required:draft.executionMode==='planned',maxLength:20000,value:draft.plan,onChange:function(e){field('plan',e.target.value)}})):null,h('label',null,'验收条件（每行一项）',h('textarea',{value:draft.acceptance,onChange:function(e){field('acceptance',e.target.value)}}))),
         h('div',{className:'cbt-row'},h('label',null,'总预算（秒，包含等待）',h('input',{type:'number',min:1,max:7200,placeholder:'留空使用服务端默认',disabled:draft.autoTimeout,value:draft.seconds,onChange:function(e){field('seconds',e.target.value)}})),
           h('label',null,'验证配置名称',h('input',{value:draft.verificationProfile,placeholder:'用户预设的 profile 名称',onChange:function(e){field('verificationProfile',e.target.value)}}))),
         h('details',null,h('summary',null,'模型、强度与自适应调优'),
@@ -1489,7 +1507,6 @@ window.__ModuleLoader__.load({
           h('label',null,'任务分类 ID',h('input',{value:draft.taskClass,placeholder:'backend-change',onChange:function(e){field('taskClass',e.target.value)}})),
           h('label',null,'偏好',h('select',{value:draft.objective,onChange:function(e){field('objective',e.target.value)}},['balanced','quality','speed'].map(function(v){return h('option',{key:v,value:v},v)}))),
           ['Model','Effort','Timeout'].map(function(kind){var key='auto'+kind;return h('label',{key:key,className:'cbt-check'},h('input',{type:'checkbox',checked:draft[key],onChange:function(e){field(key,e.target.checked)}}),'自动选择 '+({Model:'模型',Effort:'推理档位',Timeout:'历史预算'}[kind]))})),
-        h('label',{className:'cbt-check'},h('input',{type:'checkbox',checked:draft.review,onChange:function(e){field('review',e.target.checked)}}),'执行结束后调用 Codex 审查'),
         submissionKey.current?h('p',{className:'cbt-muted'},'提交编号：'+submissionKey.current):null,
         h('button',{className:'cbt-button primary',type:'submit',disabled:busy||!draft.goal.trim()},busy?'正在提交…':'提交任务')):null
       var question=editable&&task.state==='WAITING_INPUT'&&run.question
@@ -1500,17 +1517,27 @@ window.__ModuleLoader__.load({
         task.legacy?h('p',{className:'cbt-notice'},'旧版只读快照：未记录 Run 和验收证据，不可从此记录重试。'):null,
         h('div',{className:'cbt-row'},button('打开原生会话',openSession,!task.run.sessionId),editable&&!terminalTask?button('请求取消',function(){operate('cancel',{taskId:task.taskId})},busy):null,
           editable&&['RECONCILING','WAITING_APPROVAL','CANCEL_REQUESTED'].includes(task.state)?button('对账 / 补发取消',function(){operate('reconcile',{taskId:task.taskId})},busy):null,
-          editable&&terminalTask?button('创建修复 Run',function(){if(window.confirm('创建新的修复 Run，将复用本任务上下文并受两轮上限约束。'))operate('retry',{taskId:task.taskId,idempotencyKey:(retryKeys.current[task.taskId]||{}).idempotencyKey})},busy||(run.attempt>=3&&!retryKeys.current[task.taskId])):null),
+          editable&&terminalTask&&task.kind!=='workflow'&&!task.parentTaskId?button('创建修复 Run',function(){if(window.confirm('创建新的修复 Run，将复用本任务上下文并受两轮上限约束。'))operate('retry',{taskId:task.taskId,idempotencyKey:(retryKeys.current[task.taskId]||{}).idempotencyKey})},busy||(run.attempt>=3&&!retryKeys.current[task.taskId])):null,
+          task.parentTaskId?button('返回协作任务',function(){choose(task.parentTaskId)},busy):null),
         task.state==='WAITING_APPROVAL'?h('p',{className:'cbt-notice'},'请打开原生会话处理审批，然后对账。不要重新提交原任务。'):null,
-        ['RECONCILING','CANCEL_REQUESTED'].includes(task.state)?h('p',{className:'cbt-notice'},'停止尚未确认。同项目任务将继续等待；对账可能补发已经请求的取消。'):null,
+        ['RECONCILING','CANCEL_REQUESTED'].includes(task.state)?h('p',{className:'cbt-notice'},task.kind==='workflow'?'协作任务保留当前现场，请核对节点状态或集成冲突后再对账。原项目的后续写任务继续等待。':'停止尚未确认。同项目任务将继续等待；对账可能补发已经请求的取消。'):null,
         task.plan?h('details',null,h('summary',null,'计划与验收条件'),h('pre',null,task.plan),h('ul',null,(task.acceptance||[]).map(function(a,i){return h('li',{key:i},a)}))):null,
         h('nav',{className:'cbt-row','aria-label':'运行历史'},button('当前运行',function(){setHistoryId('')},!historyId),(task.history||[]).map(function(item){return button('Run '+item.attempt,function(){setHistoryId(item.runId)},false,{key:item.runId,'aria-pressed':historyId===item.runId})})),
         h('dl',null,h('dt',null,'执行结果'),h('dd',null,run.outcome||'尚未确认'),h('dt',null,'宿主结束原因'),h('dd',null,run.hostStopReason||'未记录'),h('dt',null,'验收状态'),h('dd',null,run.verification&&run.verification.status||'未记录'),h('dt',null,'执行模型'),h('dd',null,run.execution&&run.execution.selection?run.execution.selection.provider+'/'+run.execution.selection.model:'未记录'),h('dt',null,'Run'),h('dd',null,run.runId||'未记录')),
         run.tuning?h('details',null,h('summary',null,'任务调优 · 请求 / 建议 / 冻结 / 应用 / 实际证据'),h('pre',null,JSON.stringify(run.tuning,null,2))):null,
         run.observationError?h('p',{role:'alert'},'观察失败：'+run.observationError.message):null,
+        run.issue?h('p',{role:'alert'},run.issue.message):null,
+        workflowView,
         h('h3',null,'结果与证据'),h('pre',null,task.legacy?task.legacySnapshot.text||'未记录':run.result&&run.result.text||'暂无文本结果'),
         h('ul',null,(run.verification&&run.verification.checks||[]).map(function(check,i){return h('li',{key:i},(check.path||(check.argv||[]).join(' ')||'验证命令')+' · '+(check.passed===true?'通过':check.passed===false?'失败':check.status||'未验证'))})),
         h('ul',null,(run.verification&&run.verification.artifacts||[]).map(function(item){return h('li',{key:item.path},item.path+' · '+item.bytes+' bytes',h('code',null,item.hash))})),
+        h('section',null,h('h3',null,'用量与耗时'),
+          h('p',null,'执行模式：'+(modeLabels[task.executionMode]||(task.review?modeLabels.reviewed:task.plan?modeLabels.planned:modeLabels.direct))),
+          h('p',null,'DSH：未缓存输入 '+metric(run.usage&&run.usage.inputTokens)+' · 缓存读取 '+metric(run.usage&&run.usage.cacheReadTokens)+' · 输出 '+metric(run.usage&&run.usage.outputTokens)+' token'),
+          h('p',{className:'cbt-muted'},'用量完整性：'+(run.usage&&run.usage.status||'unknown')+'；实际费用未知。Codex 外部规划和协调用量未接入，不能按 token 推算订阅额度。'),
+          h('p',null,'排队 '+seconds(run.timing&&run.timing.queueMs)+' · 执行 '+seconds(run.timing&&run.timing.executionMs)+' · 验证 '+seconds(run.timing&&run.timing.verificationMs)+' · 审查 '+seconds(run.timing&&run.timing.reviewMs)+' · 总耗时 '+seconds(run.timing&&run.timing.totalMs)),
+          run.coordination?h('p',null,'等待调用：长等待 '+metric(run.coordination.awaitCalls)+' 次 · 短等待 '+metric(run.coordination.waitCalls)+' 次（当前宿主统计，随任务变化保存）'):null,
+          run.review&&run.review.usage?h('details',null,h('summary',null,'本次 Codex 审查用量'),h('pre',null,JSON.stringify(run.review.usage,null,2))):null),
         run.review?h('p',null,'Codex 审查：'+run.review.verdict+' · '+(run.review.summary||'')):null,
         questionForm,
         editable&&task.state==='REVIEW_REQUIRED'?h('section',{className:'cbt-form'},h('h3',null,'人工验收'),h('label',{className:'cbt-check'},h('input',{type:'checkbox',checked:accepted,onChange:function(e){setAccepted(e.target.checked)}}),'我已核对当前 Run 的产物和验收证据'),button('接受当前结果',function(){operate('review',{taskId:task.taskId,runId:task.activeRunId,expectedRevision:task.revision,evidenceHash:run.evidenceHash,decision:'accept'})},busy||!accepted),button('要求修改',function(){operate('review',{taskId:task.taskId,runId:task.activeRunId,expectedRevision:task.revision,evidenceHash:run.evidenceHash,decision:'changes_requested'})},busy)):null,

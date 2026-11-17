@@ -7,7 +7,7 @@ for (const file of checks) {
   const result = spawnSync(process.execPath, ['--check', file], { cwd: root, stdio: 'inherit' })
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
-const tests = ['test-codex-plugin', 'test-merge-compat', 'test-task-workbench', 'test-release-operations', 'test-frozen-executor', 'test-task-tuning', 'test-async-adapter-budget', 'test-long-tasks', 'test-retest-regressions', 'test-acceptance-regressions', 'test-task-core', 'test-auth-classify', 'test-endpoint-discovery', 'test-publish-origin', 'test-publish-origin-invalid', 'test-endpoint-mcp', 'test-execution-policy', 'test-http-route-modes', 'test-question-relay', 'test-session-executor', 'test-native-client', 'test-model-settings-client']
+const tests = ['test-workflow-scheduler', 'test-efficient-delivery', 'test-codex-plugin', 'test-merge-compat', 'test-task-workbench', 'test-release-operations', 'test-frozen-executor', 'test-task-tuning', 'test-async-adapter-budget', 'test-long-tasks', 'test-retest-regressions', 'test-acceptance-regressions', 'test-task-core', 'test-auth-classify', 'test-endpoint-discovery', 'test-publish-origin', 'test-publish-origin-invalid', 'test-endpoint-mcp', 'test-execution-policy', 'test-http-route-modes', 'test-question-relay', 'test-session-executor', 'test-native-client', 'test-model-settings-client']
 for (const test of tests) {
   console.log('\n=== ' + test + ' ===')
   const result = spawnSync(process.execPath, ['tools/' + test + '.mjs'], { cwd: root, stdio: 'inherit', timeout: 60000 })

@@ -11,9 +11,9 @@ test('Codex root plugin is portable, async-first and cache-contained',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'bridge-public-plugin-')),cache=join(dir,'cache with spaces'),home=join(dir,'isolated-user');let child,server
  try{
   await mkdir(cache);await mkdir(home)
-  for(const path of ['bin','lib','package.json','.mcp.json','.codex-plugin','skills'])await cp(new URL('../'+path,import.meta.url),join(cache,path),{recursive:true})
+  for(const path of ['bin','lib','docs','package.json','.mcp.json','.codex-plugin','skills'])await cp(new URL('../'+path,import.meta.url),join(cache,path),{recursive:true})
   const market=JSON.parse(await readFile(new URL('../.agents/plugins/marketplace.json',import.meta.url),'utf8'));assert.equal(market.plugins[0].source.path,'.')
-  const plugin=JSON.parse(await readFile(join(cache,'.codex-plugin/plugin.json'),'utf8'));assert.equal(plugin.version,'0.5.0');assert.ok(plugin.interface.defaultPrompt.join().includes('dsh_task_submit'))
+  const plugin=JSON.parse(await readFile(join(cache,'.codex-plugin/plugin.json'),'utf8'));assert.equal(plugin.version,'0.7.0');assert.ok(plugin.interface.defaultPrompt.join().includes('dsh_task_submit'))
   const skill=await readFile(join(cache,'skills/dsh-execute/SKILL.md'),'utf8');assert.ok(skill.includes('dsh_task_wait'));assert.ok(skill.includes('不要默认用旧同步'));assert.ok(skill.split('\n').length<500)
   const config=JSON.parse(await readFile(join(cache,'.mcp.json'),'utf8')).mcpServers.dsh_bridge;assert.equal(config.command,'node');assert.equal(config.cwd,'.');assert.equal(config.default_tools_approval_mode,undefined)
   const env={...process.env,HOME:home,USERPROFILE:home,CODEX_HOME:home};for(const key of Object.keys(env))if(key.startsWith('DSH_BRIDGE_'))delete env[key]
@@ -23,7 +23,7 @@ test('Codex root plugin is portable, async-first and cache-contained',async()=>{
   const rpc=(method,params)=>new Promise((resolve,reject)=>{const n=++id,timer=setTimeout(()=>reject(Error('MCP timeout '+stderr)),5000);pending.set(n,{resolve,timer});child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:n,method,params})+'\n')})
   const call=async(name,args={})=>(await rpc('tools/call',{name,arguments:args})).result
   await rpc('initialize',{protocolVersion:'2025-06-18',clientInfo:{name:'cache-smoke',version:'1'}})
-  const tools=(await rpc('tools/list',{})).result.tools;for(const name of ['dsh_task_submit','dsh_task_wait','dsh_task_preview'])assert.ok(tools.some(t=>t.name===name))
+  const tools=(await rpc('tools/list',{})).result.tools;for(const name of ['dsh_task_submit','dsh_task_wait','dsh_task_preview','dsh_task_orchestrate','dsh_task_repair_node'])assert.ok(tools.some(t=>t.name===name))
   assert.ok(tools.find(t=>t.name==='dsh_task_submit').inputSchema.properties.reasoningEffort)
   const missing=await call('dsh_status');assert.equal(missing.isError,true,'empty isolated home must not find real user DSH')
   let requests=0

@@ -12,6 +12,7 @@ try{
  if(fs.existsSync(destination))throw Error('destination must not exist')
  const health=inspectTaskData(source)
  if(health.writerLocked||health.status!=='healthy')throw Error('stop writer and verify source integrity first')
+ if(health.workflowTasks)throw Error('workflow stores also require external workspaces and Git worktree metadata; journal-only backup/restore is refused. Preserve the full workflow directory and original repositories offline.')
  const lock=path.join(source,'writer.lock');const lockFd=fs.openSync(lock,'wx',0o600)
  try {
  const files=fs.readdirSync(source).filter(n=>n==='events.jsonl'||n==='snapshot.json'||/^segment-[0-9]+\.jsonl$/.test(n))

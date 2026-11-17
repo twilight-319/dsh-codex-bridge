@@ -1,8 +1,12 @@
 # Codex × DSH bridge 2.0 RC
 
+当前源码候选 **2.0.0-rc.4 / Codex 包装 0.7.0**：增加父子任务依赖调度、最多两个DSH执行者、真实隔离worktree、统一预算和节点修复，以及内容冲突检测、统一集成与审查。见[大任务协作调度](docs/WORKFLOW_SCHEDULING.md)。尚未安装到当前运行环境或作为稳定版发布，真机及真实费用验收未完成，发布状态仍为NO-GO；下文rc.3及rc.2保留各轮背景。
+
+本地开发候选 **2.0.0-rc.3 / Codex 包装 0.6.0**：新增 direct/planned/reviewed 执行模式、完成/待处理长等待、默认精简 MCP 结果、DSH 事件用量和阶段耗时。说明与限制见[减少协调开销](docs/EFFICIENT_EXECUTION.md)。尚未发布、安装或完成真实额度对照验收；以下 rc.2 / 0.5.0 内容保留原发布背景，不能作为新候选已上线的证明。
+
 工程收尾候选 **2.0.0-rc.2**，发布仍为 **NO-GO，等待固定 RC 的真机复验**。新增任务工作台、只读 doctor、旧记录导入、备份恢复与发布证据检查。左侧 Codex → **任务** 即可进入。
 
-`main` 当前为 **2.0.0-rc.2 集成候选**，合并远端任务工作台/诊断/导入与本地长任务/维护/调优能力；不是正式 2.0.0 稳定发布。复验或安装时固定完整 40 位提交 SHA。原收尾开发记录见 [`feat/task-core-beta1` / PR #1](https://github.com/twilight-319/dsh-codex-bridge/pull/1)。升级前使用 maintenance begin 排空，不要重载在途任务，并按发布验收文档备份。
+`main` 当前为 **2.0.0-rc.4 开发候选**，合并远端任务工作台/诊断/导入与本地长任务/维护/调优能力；不是正式 2.0.0 稳定发布。复验或安装时固定完整 40 位提交 SHA。原收尾开发记录见 [`feat/task-core-beta1` / PR #1](https://github.com/twilight-319/dsh-codex-bridge/pull/1)。升级前使用 maintenance begin 排空，不要重载在途任务，并按发布验收文档备份。
 
 - [2.0 使用 升级与发布验收](docs/V2_RELEASE.md)
 - [Beta 1 阻断与复验记录](docs/BETA1_RETEST.md)
@@ -127,7 +131,7 @@ codex plugin add dsh-bridge@dsh-bridge
 codex plugin list
 ```
 
-然后完全退出并重新打开Codex App，先只调用`dsh_status`。Codex包装插件版本0.5.0，DSH宿主仍为rc.2；详见[完整双端安装、升级与排错](docs/CODEX_INSTALL.md)。旧`dsh-bridge@personal`应确认后单独移除，避免重复服务器。
+然后完全退出并重新打开Codex App，先只调用`dsh_status`。Codex包装插件版本0.7.0，DSH源码候选为rc.4；详见[完整双端安装、升级与排错](docs/CODEX_INSTALL.md)。旧`dsh-bridge@personal`应确认后单独移除，避免重复服务器。
 
 如果不用插件市场，也可手工在 Codex 的 MCP 设置中添加一个 stdio 服务器（此方式不自动提供技能，不要与上述插件同时注册同名服务器）：
 

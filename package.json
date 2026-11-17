@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-codex-bridge",
-  "version": "2.0.0-rc.2",
+  "version": "2.0.0-rc.4",
   "private": true,
   "description": "Codex plans, DSH executes: native-session workbench, parallel tasks and question relay.",
   "type": "module",

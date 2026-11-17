@@ -1,6 +1,6 @@
 {
   "targetVersion": "2.0.0",
-  "candidateVersion": "2.0.0-rc.2",
+  "candidateVersion": "2.0.0-rc.4",
   "sourceCommit": null,
   "gates": [
     {"id":"offline-regressions","status":"not-verified","evidence":""},

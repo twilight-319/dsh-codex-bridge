@@ -9,6 +9,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import {dispatchTask} from '../lib/task-api.js';
 
 const serverPath = fileURLToPath(new URL('../bin/mcp-server.mjs', import.meta.url));
 const TOKEN = 'endpoint-test-bearer-DO-NOT-LOG';
@@ -159,6 +160,64 @@ test('async wait cancellation is observer-only and tool schemas distinguish budg
   const answer=await api.request('tools/call',{name:'dsh_task_answer',arguments:{taskId:'t',runId:'r',requestId:'q',answers:[]}});assert.notEqual(answer.result.isError,true);
   assert.equal(mock.requests.length,2);assert.equal(JSON.parse(mock.requests[1].body).action,'answer');
 });
+
+test('await uses one HTTP observation, summary/full projection and read-only hints', async t => {
+  const f=await fixture(t)
+  const task={taskId:'t',activeRunId:'r',state:'REVIEW_REQUIRED',revision:9,goal:'private context',requestedInput:{large:'x'.repeat(20000)},run:{sessionId:'s',result:{stopReason:'completed',text:'done'},verification:{status:'not_configured'}}}
+  const mock=await f.mock('await',(req,res)=>{res.setHeader('content-type','application/json');const body=JSON.parse(mock.requests.at(-1).body);res.end(JSON.stringify({ok:true,value:body.action==='await'?{task,reason:'settled-or-input'}:task}))})
+  f.publish(mock.origin);const api=await f.client()
+  const tools=(await api.request('tools/list',{})).result.tools
+  assert.equal(tools.find(t=>t.name==='dsh_task_await').annotations.readOnlyHint,true)
+  assert.equal(tools.find(t=>t.name==='dsh_task_submit').annotations.readOnlyHint,false)
+  const awaited=(await api.request('tools/call',{name:'dsh_task_await',arguments:{taskId:'t',waitMs:60000}})).result
+  const summary=JSON.parse(awaited.content[0].text)
+  assert.equal(summary.task.executionCompleted,true);assert.equal(summary.task.goal,undefined)
+  assert.equal(mock.requests.length,1);assert.equal(JSON.parse(mock.requests[0].body).waitMs,60000)
+  const fetched=(await api.request('tools/call',{name:'dsh_task_get',arguments:{taskId:'t',detail:'full'}})).result
+  assert.equal(JSON.parse(fetched.content[0].text).goal,'private context')
+  assert.equal(JSON.parse(mock.requests.at(-1).body).detail,undefined,'view options must not enter task idempotency input')
+  const invalid=await api.request('tools/call',{name:'dsh_task_await',arguments:{taskId:'t',waitMs:600001}})
+  assert.equal(invalid.error.code,-32602);assert.equal(mock.requests.length,2)
+})
+
+test('cancelling an active await closes only its HTTP observation, without a cancel POST',async t=>{
+  const f=await fixture(t)
+  const mock=await f.mock('pending',()=>{})
+  f.publish(mock.origin);const api=await f.client()
+  // fixture initialization uses request IDs 1 and 2, so this observation is 3.
+  const waiting=api.request('tools/call',{name:'dsh_task_await',arguments:{taskId:'t',waitMs:60000}})
+  for(let i=0;i<100&&!mock.requests.length;i++)await new Promise(r=>setTimeout(r,5))
+  assert.equal(mock.requests.length,1)
+  api.child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/cancelled',params:{requestId:3}})+'\n')
+  const result=await waiting
+  assert.equal(result.result.isError,true);assert.ok(result.result.content[0].text.includes('后台DSH任务继续'))
+  assert.deepEqual(mock.requests.map(r=>JSON.parse(r.body).action),['await'])
+})
+
+test('await network failure is a recoverable tool error with one POST and no automatic retry',async t=>{
+  const f=await fixture(t),mock=await f.mock('reset',(_req,res)=>res.destroy())
+  f.publish(mock.origin);const api=await f.client()
+  const frame=await api.request('tools/call',{name:'dsh_task_await',arguments:{taskId:'known-task',waitMs:60000}})
+  assert.equal(frame.error,undefined);assert.equal(frame.result.isError,true)
+  assert.ok(frame.result.content[0].text.includes('保留原taskId'))
+  assert.equal(mock.requests.length,1)
+})
+
+test('workflow MCP tools route graph admission and idempotent node repair with compact child status',async t=>{
+  const f=await fixture(t),seen=[]
+  const root={taskId:'workflow-test',kind:'workflow',activeRunId:'r',cwd:f.home,state:'WORKFLOW_PAUSED',revision:1,workflow:{phase:'paused',parallelism:2,repairsUsed:0,maxRepairs:1,maxModelCalls:40,maxObservedTokens:null,nodes:[{id:'alpha',state:'FAILED',dependsOn:[],writePaths:['a.txt'],childTaskId:'child-a'}]},run:{deadline:Date.now()+10000,issue:{code:'node-failed',nodeId:'alpha',message:'repair required'},verification:{status:'pending'}}}
+  const manager={async orchestrate(input){seen.push(input);return root},async repairNode(input){seen.push(input);return root}}
+  const mock=await f.mock('workflow',async(req,res)=>{const value=await dispatchTask(manager,JSON.parse(mock.requests.at(-1).body));res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,value}))})
+  f.publish(mock.origin);const api=await f.client()
+  const tools=(await api.request('tools/list',{})).result.tools
+  assert.ok(tools.find(t=>t.name==='dsh_task_orchestrate').inputSchema.properties.nodes.items.properties.writePaths)
+  const nodes=[{id:'alpha',goal:'a',writePaths:['a.txt']}]
+  const frame=await api.request('tools/call',{name:'dsh_task_orchestrate',arguments:{goal:'graph',idempotencyKey:'one',nodes,parallelism:2}})
+  const summary=JSON.parse(frame.result.content[0].text)
+  assert.equal(summary.kind,'workflow');assert.equal(summary.workflow.nodes[0].childTaskId,'child-a');assert.equal(summary.issue.nodeId,'alpha');assert.deepEqual(seen[0].nodes,nodes)
+  await api.request('tools/call',{name:'dsh_task_repair_node',arguments:{taskId:'workflow-test',nodeId:'alpha',idempotencyKey:'repair-one'}})
+  assert.equal(seen[1].nodeId,'alpha');assert.equal(seen[1].idempotencyKey,'repair-one')
+})
 
 test('same initialized MCP process follows discovery changes for GET and POST', async (t) => {
   const f = await fixture(t);

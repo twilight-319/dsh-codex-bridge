@@ -26,6 +26,7 @@ fetch:async(url,options={})=>{
  if(body.action==='answer')return json({ok:true,value:{...task,state:'RUNNING'}})
  if(body.action==='cancel')return json({ok:true,value:{...task,state:'CANCEL_REQUESTED'}})
  if(body.action==='retry'){if(!sandbox.retryFailed){sandbox.retryFailed=true;task={...task,activeRunId:'run-third',run:{...task.run,attempt:3}};throw Error('retry response lost')}return json({ok:true,value:task})}
+ if(body.action==='repair_node'){task={...task,workflow:{...task.workflow,repairsUsed:1}};if(!sandbox.repairFailed){sandbox.repairFailed=true;throw Error('repair response lost')}return json({ok:true,value:task})}
   if(body.action==='reconcile')return json({ok:true,value:task})
  if(body.action==='importLegacy')return json({ok:true,value:{imported:1}})
  return json({ok:false,error:'unexpected'},500)
@@ -56,7 +57,7 @@ const goal=walk(tree).find(n=>n.type==='textarea'&&n.props.required);goal.props.
 assert.ok(walk(tree).some(n=>n.type==='input'&&n.props.type==='number'&&n.props.max===7200));walk(tree).find(n=>n.type==='input'&&n.props.placeholder==='例如 max，须获授权').props.onChange({target:{value:'max'}});tree=view();
 walk(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await flush();tree=view();assert.ok(JSON.stringify(tree).includes('test-key-2'))
 walk(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await flush();tree=view()
-const submits=requests.filter(r=>r.action==='submit');assert.equal(submits.length,2);assert.equal(submits[0].idempotencyKey,submits[1].idempotencyKey);assert.equal(submits[0].timeoutMs,undefined);assert.equal(submits[0].reasoningEffort,'max')
+const submits=requests.filter(r=>r.action==='submit');assert.equal(submits.length,2);assert.equal(submits[0].idempotencyKey,submits[1].idempotencyKey);assert.equal(submits[0].timeoutMs,undefined);assert.equal(submits[0].reasoningEffort,'max');assert.equal(submits[0].executionMode,'direct');assert.equal(submits[0].review,undefined);assert.equal(submits[0].plan,undefined)
 button(tree,'诊断').props.onClick();await flush();tree=view();assert.ok(JSON.stringify(tree).includes('not-verified'))
 // Refresh picks up a real question; selected labels and current requestId are sent together.
 task={...task,state:'WAITING_INPUT',run:{...task.run,question:{requestId:'latest-question',questions:[{id:'q',question:'选择继续方式',options:[{label:'继续'},{label:'停止'}]}]}}}
@@ -64,4 +65,14 @@ button(tree,'刷新').props.onClick();await flush();tree=view();await flush();tr
 walk(tree).find(n=>n.type==='input'&&n.props.type==='radio').props.onChange();tree=view()
 walk(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await flush();tree=view()
 const answer=requests.find(r=>r.action==='answer');assert.equal(answer.requestId,'latest-question');assert.deepEqual(answer.answers[0].selected,['继续'])
+task={...sample,taskId:'workflow-parent',kind:'workflow',state:'WORKFLOW_PAUSED',run:{...sample.run,issue:{message:'alpha需要修复'}},workflow:{phase:'paused',parallelism:2,repairsUsed:0,maxRepairs:1,nodes:[{id:'alpha',goal:'修改A模块',state:'FAILED',childTaskId:'child-alpha',childState:'FAILED',dependsOn:[],writePaths:['src/a'],error:{message:'节点验证失败'}}]}}
+button(tree,'刷新').props.onClick();await flush();tree=view();await flush();tree=view()
+assert.ok(JSON.stringify(tree).includes('修改A模块'));assert.ok(JSON.stringify(tree).includes('src/a'))
+assert.ok(!walk(tree).some(n=>n.type==='button'&&n.children[0]==='创建修复 Run'),'parent must not bypass node repair budget')
+button(tree,'修复节点 alpha').props.onClick();await flush();tree=view()
+button(tree,'刷新').props.onClick();await flush();tree=view();await flush();tree=view()
+assert.equal(button(tree,'修复节点 alpha').props.disabled,false,'uncertain accepted repair must remain replayable at the budget boundary')
+button(tree,'修复节点 alpha').props.onClick();await flush();tree=view()
+const nodeRepairs=requests.filter(r=>r.action==='repair_node');assert.equal(nodeRepairs.length,2);assert.equal(nodeRepairs[0].idempotencyKey,nodeRepairs[1].idempotencyKey);assert.equal(nodeRepairs[0].nodeId,'alpha')
+assert.ok(requests.filter(r=>r.action==='list').every(r=>r.rootsOnly===true))
 console.log('PASS: task workbench read-only mount, guarded review, Run history, idempotent uncertain submit, diagnostics and current-question answer.')
