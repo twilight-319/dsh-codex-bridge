@@ -228,7 +228,7 @@ const TOOLS = [
     description: [
       '让 DSH（DeepSeek Harness）本机实际执行一个任务，并返回它的最终回答。',
       'DSH 跑的是一个真实会话：能读写工作目录里的文件、执行命令，动作发生在用户本机。',
-      '仅适合短小步骤，旧同步契约最多10分钟且到期会取消。多阶段、构建或复杂仓库任务请用 dsh_task_submit（后台预算默认30分钟）并用 dsh_task_wait 查询，不要反复重发。',
+      '仅适合短小步骤，旧同步契约最多10分钟且到期会取消。多阶段任务请用 dsh_task_submit 后台交办；需要在对话接结果时使用 dsh_task_observe。',
       '返回的是 DSH 的最终 assistant 文本；失败时以 isError 返回可读原因（超时、连接失败、401 等）。',
       '默认每次新建会话；传 sessionId 可复用同一 DSH 会话继续追问（保留上下文）。',
       '如果返回 needsInput=true，说明 DSH 在等待用户回答：把 question 原样呈现给用户，然后调用 dsh_answer 回答同一会话。',
@@ -605,12 +605,20 @@ const taskSchemas = {
 taskSchemas.orchestrate=[{goal:field('string'),cwd:field('string','Git仓库根目录；执行者工作区由程序隔离，不传外部cwd。'),idempotencyKey:field('string'),nodes:{type:'array',items:workflowNodeSchema,description:'一次规划1至12个节点，依赖无环；并行节点的修改范围不得重叠。'},timeoutMs:field('integer','整个协作任务共享的总时限，默认30分钟，包含准备、等待和验收，不随修复续期。'),parallelism:field('integer','1或2，默认2'),maxRepairs:field('integer','整个父任务最多0至2轮修复，默认1'),maxModelCalls:field('integer','DSH观测调用数上限，默认40；在用量事件返回后实施，不是服务商硬限额。'),maxObservedTokens:field('integer','可选已观测token预算；未知费用不推算。'),verificationProfile:field('string'),review:field('boolean','集成后才额外调用一次Codex审查；不对每个节点重复审查。'),provider:field('string'),model:field('string'),reasoningEffort:field('string'),reason:field('string'),tuning:tuningSchema},['goal','idempotencyKey','nodes']];
 taskSchemas.preview=[{...taskSchemas.submit[0]},[]];
 delete taskSchemas.preview[0].idempotencyKey;
+const submissionActions = new Set(['submit', 'orchestrate']);
+const deliveryModes = ['background', 'conversation'];
+for (const action of submissionActions) {
+  taskSchemas[action][0].delivery = {
+    type: 'string', enum: deliveryModes, default: 'background',
+    description: 'background 默认只返回交办回执，在 DSH 的 Codex → 任务查看。用户要求本对话等结果时用 conversation。',
+  };
+}
 const taskDescriptions = {
-  orchestrate:'大任务：一次提交依赖图，程序在独立Git worktree中运行最多两个DSH执行者、检查修改范围并统一集成。共享父任务时限和观测预算；失败只修复节点，不递归拆分。之后用同一父taskId等待、回答、取消或对账。',
+  orchestrate:'有独立分工收益的大任务可一次提交依赖图，由 DSH 在隔离 Git worktree 执行并集成。默认返回父任务交办回执，失败只修复节点。用户要求本对话等结果时用 delivery=conversation。',
   repair_node:'父协作任务暂停时，只修复指定失败节点。需要稳定幂等键；复用原工作区和会话，受整个父任务修复次数、原deadline及当前授权约束。',
   preview:'只读调优预览，不创建Task/会话，不预留预算；查看授权模型、档位选择与历史依据，提交时会重新解析。',
-  submit:'异步提交本机任务，简单任务direct，已有计划planned，需要额外Codex审查才reviewed。立即返回简要任务凭据，随后优先dsh_task_await。默认不回传完整审计，需核查时detail=full。幂等键重用不重派；不要擅自扩展用户需求或重复研究。',
-  await:'优先使用：程序持续等待完成或需要处理的状态，普通进度不返回。默认最多10分钟，等待超时或断线不会取消后台任务；超时继续等待同一taskId，禁止重新提交。客户端需支持长工具调用；不支持时waitMs=55000。',
+  submit:'异步交办给 DSH 并保存任务。简单任务用 direct，有关键决策时用 planned 携带一次说明，明确要求审查才用 reviewed。默认返回交办回执并结束本轮。用户要求本对话等结果时用 delivery=conversation，再调用 dsh_task_observe。使用原幂等键恢复未知回执。',
+  await:'同对话等待的兼容工具，等待完成或需要处理的状态。默认最多10分钟；等待到期继续使用同一 taskId，后台任务仍在运行。',
   wait:'等待任务变化或短等待到期。只结束本次等待，不取消后台执行；根据返回revision继续等待。',
   answer:'回答当前问题后立即返回任务快照；后台继续同Run，用wait查询，不重发原任务。',
   maintenance_begin:'维护前关闭新任务准入并排空既有任务。忙返回409和维护凭据，保持draining；绝不取消任务。只有ready才可更新。',
@@ -647,6 +655,12 @@ async function callObserve(args,signal) {
 async function callTask(action,args,signal) {
   const {detail='summary',...input}=requireObject(args??{},'arguments');
   if(!['summary','full'].includes(detail))throw new InvalidParams('detail必须summary/full');
+  const submission = submissionActions.has(action);
+  const delivery = input.delivery === undefined ? 'background' : input.delivery;
+  if (Object.hasOwn(input, 'delivery') && (!submission || !deliveryModes.includes(delivery))) {
+    throw new InvalidParams('delivery 仅用于提交，可选 background 或 conversation。');
+  }
+  if (submission) delete input.delivery;
   if(action==='wait' && input.waitMs !== undefined && (!Number.isInteger(input.waitMs)||input.waitMs<0||input.waitMs>25000))throw new InvalidParams('waitMs 必须是0~25000整数');
   if(action==='await' && input.waitMs !== undefined && (!Number.isInteger(input.waitMs)||input.waitMs<0||input.waitMs>AWAIT_MAX_MS))throw new InvalidParams('waitMs 必须是0~600000整数');
   const transportMs=action==='await'?(input.waitMs??AWAIT_DEFAULT_MS)+10000:action==='wait'?(input.waitMs??10000)+10000:['cancel','reconcile'].includes(action)?25000:10000;
@@ -658,7 +672,17 @@ async function callTask(action,args,signal) {
   }
   const {response,parsed}=reply;
   if(response.status<200||response.status>=300||parsed.json?.ok!==true||!Object.hasOwn(parsed.json,'value'))return errorResult(failureDetail(parsed.json,'任务请求失败')+(parsed.json?.maintenance?'\n'+JSON.stringify({maintenance:parsed.json.maintenance}):''));
-  return toTextResult(JSON.stringify(deliveryView(action,parsed.json.value,detail)));
+  const view = deliveryView(action,parsed.json.value,detail);
+  if (submission && detail === 'summary' && view?.taskId && view.activeRunId) {
+    view.handoff = {
+      delivery,
+      workbench: 'DSH → Codex → 任务 → 按编号打开',
+      accepted: true,
+      next: delivery === 'background' ? 'return-receipt'
+        : ['SUCCEEDED', 'REVIEW_REQUIRED', 'FAILED', 'CANCELLED', 'LEGACY'].includes(view.state) ? 'deliver-result' : 'observe',
+    };
+  }
+  return toTextResult(JSON.stringify(view));
 }
 
 // ── 工具实现 ───────────────────────────────────────────────────────────────
@@ -903,10 +927,10 @@ async function handleRequest(message) {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
         instructions: [
-          '先用dsh_status确认本机DSH连接与用户模型政策。',
-          '用dsh_task_submit持久化委派，简单任务direct，已有计划planned，需要额外Codex审查才reviewed；不要默认扩展用户需求。',
-          '独立分工有收益的大任务用dsh_task_orchestrate一次提交依赖和修改范围，在隔离Git worktree中运行最多两个DSH执行者，共享父时限和修复次数；用父taskId等待、回答、取消和对账，失败只repair_node。',
-          '优先dsh_task_observe：MCP程序内续等，默认10分钟；经functions.exec调用必须显式yield_time_ms=620000，若返回运行cell，functions.wait也用长yield。两层预算独立，客户端可能限制外层，不能声称零唤醒。观察过期只续等同一taskId/runId，不重派。',
+          '首次使用、连接异常或需要主动选模型时，用 dsh_status 确认连接与用户政策。',
+          '用 dsh_task_submit 交办给 DSH。明确任务用 direct，需要关键决策时用 planned 提供一次说明，明确要求审查才用 reviewed。独立分工有收益时用 dsh_task_orchestrate。',
+          '默认 delivery=background。提交成功后回报已受理、taskId 和 DSH → Codex → 任务 → 按编号打开，当前回合在回执处结束。任务工作台提供进度、待答和成品。',
+          '用户要求在对话中等结果时用 delivery=conversation，优先 dsh_task_observe 程序续等。经 functions.exec 调用显式延长外层 yield；若返回运行 cell，继续等待原 cell。观察过期只续等同一 taskId/runId。',
           '默认返回精简摘要，完整审计按需detail=full。WAITING_INPUT使用最新runId/requestId回答；原生审批由用户处理；不确定结果先对账。',
           '模型、档位与权限仅限用户授权，显式选择和同项auto不能并用。未知用量不推算费用或订阅额度。',
           '旧dsh_execute/dsh_answer仅作短步骤兼容，600秒到期会请求停止，不承接复杂长任务。',

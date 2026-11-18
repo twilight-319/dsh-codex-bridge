@@ -21,7 +21,7 @@ import { homedir } from 'node:os'
  */
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { createRunner, resolveCodexBin } from './lib/codex-v2.js'
-import { gatherDiff, gatherFiles, repoFacts } from './lib/context.js'
+import { gatherDiff, gatherFiles } from './lib/context.js'
 import { createExecutor, DEFAULT_EXECUTE_PATH, DEFAULT_STATUS_PATH, isInternalSessionId, registerHttpRoute } from './lib/dsh-exec-v4.js'
 import { createExecutionPolicy } from './lib/execution-policy.js'
 import { createQuestionRelay } from './lib/question-relay.js'
@@ -33,9 +33,10 @@ import { mountBrowserRoute } from './lib/route-host-v2.js'
 import { publishBridgeOrigin } from './lib/publish-origin.js'
 import { buildPrompt, parseAnswer } from './lib/prompts.js'
 import { SCHEMAS, assertResultShape, outputSchema } from './lib/schemas.js'
+import { createAdvisorBudget, MANUAL_ADVISOR_MARKER, nativeAdvisorScope } from './lib/advisor-budget.js'
 
 export const name = 'codex-bridge'
-export const inject = ['tools', 'systemPrompt', 'workingDirectory', 'connection']
+export const inject = ['tools', 'systemPrompt', 'workingDirectory', 'connection', 'agents']
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -54,6 +55,7 @@ const DEFAULTS = {
   sandbox: 'read-only',
   maxContextChars: 120_000,
   promptPolicy: true,
+  advisorMode: 'auto',
   logRuns: true,
   sessionMode: 'app-server',
   maxSessions: 3,
@@ -69,23 +71,18 @@ const DEFAULTS = {
 
 const POLICY = `## Codex advisor (codex_* tools)
 
-You are the executor; a real Codex/GPT session (read-only) is the strategist, available through \`codex_plan\`, \`codex_decide\`, \`codex_review\` and \`codex_ask\`.
+DSH owns implementation and verification. Handle routine work locally. Resolve business preferences with the user.
+Spend one automatic expert consultation only when the answer can change your next action:
+- Set reason=planning with codex_plan before a complex task when dependencies or compatibility affect the sequence.
+- Set reason=decision with codex_decide or codex_ask for a material choice between approaches.
+- Set reason=blocked with codex_decide or codex_ask after repeated failure or contradictory evidence.
+Send a single question, the relevant facts, and only the necessary file paths. Use the returned decision or plan, verify it in the repository, and report what you adopted and what happened. If consultation fails, continue where evidence allows or report the blocker. Keep normal delivery in DSH.
+When the latest human message begins with an @codex line, the user has asked for one explicit consultation. Use codex_review only for a user-requested review. For another explicit consult the user can send a new @codex message.`
 
-Consult it at decision points — not on every step:
-- the request is ambiguous, or several designs are plausible and the trade-off matters;
-- before an irreversible or high-blast-radius change: schema/data migration, bulk rewrite, deleting files, dependency or build-config changes, release/publish;
-- after the same approach has failed twice, or a result contradicts expectations;
-- the user asks you to think first or to pick an approach.
-
-Do not consult for routine work: reading files, small edits, running tests, formatting, obvious fixes.
-
-How to call:
-- One precise sentence for \`task\`/\`question\`, plus \`context\` with facts the model cannot see (errors already hit, constraints, what you tried) and \`paths\` for files it must read.
-- Prefer \`paths\` over pasting diffs; big pasted text only makes the consult slower.
-- Pass \`effort: "low"\` for routine decisions; omit it (native high) only for architecture-level calls.
-- codex_plan returns steps/decisions/acceptance; codex_decide returns one verdict; codex_review returns severity-ranked findings on the current diff; codex_ask is a free-form second opinion.
-
-After a consult: follow the decision unless the repository contradicts it, and mention in your answer that the direction came from the Codex review. If a call fails (timeout, quota, not logged in), report it and continue with your own judgement rather than retrying blindly.`
+const ADVISOR_REASON = {
+  type: 'string', enum: ['planning', 'decision', 'blocked'],
+  description: 'For an automatic consultation, indicate whether the expert will help with planning, a material decision, or a blocker.',
+}
 
 const PATH_LIST = {
   type: 'array',
@@ -107,7 +104,7 @@ const TASKS = {
   plan: {
     name: 'codex_plan',
     description:
-      'Ask the Codex/GPT strategist for an implementation plan and the decisions behind it (read-only, one fresh Codex session, ~10-70s). Use before a non-trivial change when the approach is not obvious, when the request is ambiguous, or before a high-blast-radius rewrite. Returns steps with files/risks, decisions, acceptance checks and open questions.',
+      'Consult Codex once before a complex task when sequencing, dependencies or compatibility matter. Returns a plan, decisions and acceptance checks for DSH to implement.',
     parameters: {
       type: 'object',
       properties: {
@@ -119,6 +116,7 @@ const TASKS = {
         paths: PATH_LIST,
         constraints: TEXT_LIST,
         effort: EFFORT,
+        reason: ADVISOR_REASON,
       },
       required: ['task'],
       additionalProperties: false,
@@ -127,7 +125,7 @@ const TASKS = {
   decide: {
     name: 'codex_decide',
     description:
-      'Ask the Codex/GPT strategist for one decisive verdict between alternatives, or before an irreversible action (migration, deletion, dependency/config change, release). Read-only, ~10-40s. Returns the decision, rationale, confidence, rejected alternatives and the next action.',
+      'Consult Codex about one material decision or blocker. Supply the options and the evidence already collected. DSH owns implementation and approvals.',
     parameters: {
       type: 'object',
       properties: {
@@ -140,6 +138,7 @@ const TASKS = {
         constraints: TEXT_LIST,
         paths: PATH_LIST,
         effort: EFFORT,
+        reason: ADVISOR_REASON,
       },
       required: ['question'],
       additionalProperties: false,
@@ -148,7 +147,7 @@ const TASKS = {
   review: {
     name: 'codex_review',
     description:
-      'Ask the Codex/GPT strategist to review the current uncommitted change (default), the staged diff, or specific files. Returns a verdict plus severity-ranked findings (blocker/major/minor/nit) with file:line and a fix. Read-only, ~10-40s. Use before reporting a non-trivial change as done.',
+      'Ask Codex to review changes when the user requests a review with an @codex line. Returns a verdict, concrete findings and fixes. Prefer a focused diff or specific files.',
     parameters: {
       type: 'object',
       properties: {
@@ -177,7 +176,7 @@ const TASKS = {
   ask: {
     name: 'codex_ask',
     description:
-      'Ask the Codex/GPT strategist one focused question when you need a second opinion without a full plan (e.g. "is this an API misuse?", "which failure is primary?"). Read-only, ~10-40s. Returns an answer, key points and a suggested next action.',
+      'Consult Codex about one focused uncertainty or blocker. Send the evidence and what DSH has already tried. Returns a suggested next action.',
     parameters: {
       type: 'object',
       properties: {
@@ -185,6 +184,7 @@ const TASKS = {
         context: { type: 'string', description: 'Facts the strategist cannot see from the repo alone.' },
         paths: PATH_LIST,
         effort: EFFORT,
+        reason: ADVISOR_REASON,
       },
       required: ['question'],
       additionalProperties: false,
@@ -204,9 +204,10 @@ function bullets(items, empty = '') {
 function footer(meta) {
   if (!meta) return ''
   const seconds = ((meta.elapsedMs ?? 0) / 1000).toFixed(1)
-  const tokens = meta.inputTokens ? ` · ${Math.round(meta.inputTokens / 1000)}k in / ${meta.outputTokens ?? 0} out` : ''
+  const tokens = ` · 输入 ${meta.inputTokens ?? '未知'} / 缓存命中 ${meta.cachedInputTokens ?? '未知'} / 输出 ${meta.outputTokens ?? '未知'} token`
   const mode = meta.mode === 'exec-fallback' ? ' · exec fallback' : meta.mode === 'app-server' ? ' · app-server' : ''
-  return `\n\n_Codex ${meta.model} · ${seconds}s${tokens}${mode} · sandbox ${meta.sandbox}_`
+  const source = meta.reused ? '读取已有建议' : meta.source === 'manual' ? '用户发起咨询' : '自动咨询'
+  return `\n\n_Codex ${meta.model} · ${source} · ${seconds}s${tokens}${mode}_`
 }
 
 const RENDERERS = {
@@ -294,6 +295,7 @@ function normalizeConfig(config) {
   if (resolved.sessionMode !== 'app-server' && resolved.sessionMode !== 'exec') {
     throw new Error('codex-bridge: sessionMode must be "app-server" or "exec"')
   }
+  if (!['auto', 'manual'].includes(resolved.advisorMode)) throw new Error('codex-bridge: advisorMode must be "auto" or "manual"')
   return resolved
 }
 
@@ -306,12 +308,27 @@ function pickMeta(result) {
     cwd: result.meta.cwd,
   }
   if (result.meta.usage) {
-    meta.inputTokens = result.meta.usage.input_tokens
-    meta.outputTokens = result.meta.usage.output_tokens
+    for (const [key, field] of Object.entries({inputTokens:'input_tokens',cachedInputTokens:'cached_input_tokens',outputTokens:'output_tokens',reasoningTokens:'reasoning_output_tokens'})) {
+      const count = result.meta.usage[field]
+      if (Number.isSafeInteger(count) && count >= 0) meta[key] = count
+    }
   }
   if (result.meta.threadId) meta.threadId = result.meta.threadId
   if (result.meta.mode) meta.mode = result.meta.mode
   return meta
+}
+
+function focusedAdvisorInput(input, limits) {
+  const bounded = (value, max) => typeof value === 'string' ? value.trim().slice(0, max) : undefined
+  const list = (value, max, width) => Array.isArray(value)
+    ? value.filter(item => typeof item === 'string' && item.trim()).slice(0, max).map(item => item.trim().slice(0, width))
+    : undefined
+  return {
+    task: bounded(input.task, 2000), question: bounded(input.question, 2000),
+    context: bounded(input.context, 4000), focus: bounded(input.focus, 2000),
+    paths: list(input.paths, 6, 500), options: list(input.options, 8, 300), constraints: list(input.constraints, 8, 300),
+    target: input.target, diff: bounded(input.diff, limits.maxDiffChars), effort: input.effort,
+  }
 }
 
 /**
@@ -336,6 +353,16 @@ export function apply(ctx, config = {}) {
   const limits = {
     maxContextChars: resolved.maxContextChars,
     maxDiffChars: Math.min(200_000, Math.max(20_000, resolved.maxContextChars * 1.5)),
+  }
+  const reserveAdvisor = createAdvisorBudget(join(homedir(), '.dsh', 'codex-bridge', 'advisor-v1'), { logRuns: resolved.logRuns !== false })
+  const agentRegistry = ctx.agents ?? ctx.get?.('agents')
+  const canIdentifyTurn = typeof agentRegistry?.turnBoundaryOf === 'function' && typeof agentRegistry?.currentInitiator === 'function'
+  let previousBridgeSessions
+  function isBridgeAgent(id) {
+    if (id == null) return false
+    if (isInternalSessionId(id)) return true
+    previousBridgeSessions ??= new Set(readSessions({ limit: 10000 }).map(entry => entry.sessionId))
+    return previousBridgeSessions.has(id)
   }
 
   // Cordis effect cleanup: the effect body runs now and returns the disposer
@@ -393,7 +420,7 @@ export function apply(ctx, config = {}) {
       executionPolicy, tuningHistory:resolved.tuningHistory,
       verificationService:(()=>{try{return typeof ctx.get==='function' ? ctx.get('bridgeVerification') : ctx.bridgeVerification}catch{return null}})(),
       reviewer: async (task,signal) => {
-        const result=await runner.consult({prompt:buildPrompt('review',{context:JSON.stringify({goal:task.goal,acceptance:task.acceptance,before:task.run.before,verification:task.run.verification}).slice(0,120000),diff:task.run.after?.diff ?? ''},{cwd:task.cwd,files:'',diff:task.run.after?.diff ?? ''}),schema:SCHEMAS.review,cwd:task.cwd,signal,kind:'review',sessionKey:'task-review|'+task.taskId})
+        const result=await runner.consult({prompt:buildPrompt('review',{context:JSON.stringify({goal:task.goal,acceptance:task.acceptance,before:task.run.before,verification:task.run.verification}).slice(0,120000),diff:task.run.after?.diff ?? ''},{cwd:task.cwd,files:'',diff:task.run.after?.diff ?? ''}),schema:SCHEMAS.review,cwd:task.cwd,signal,kind:'review',sessionKey:'task-review|'+task.taskId,noRetry:true})
         const parsed=parseAnswer(result.answer)
         if(!parsed.ok) throw new Error('invalid review')
         return { ...assertResultShape('review',parsed.value), usage:result.meta?.usage ?? null, elapsedMs:result.meta?.elapsedMs ?? null }
@@ -579,10 +606,16 @@ export function apply(ctx, config = {}) {
     return process.cwd()
   }
 
-  async function run(kind, args, exec) {
-    const cwd = await cwdOf(exec)
-    const facts = await repoFacts(cwd).catch(() => null)
-    const files = args.paths?.length ? await gatherFiles(cwd, args.paths, limits.maxContextChars) : ''
+  async function run(kind, args, exec, scope, admission, reason) {
+    const automatic = admission.source === 'automatic'
+    const timeoutMs = Math.floor(automatic ? Math.min(90_000, resolved.timeoutMs) : resolved.timeoutMs)
+    const deadline = AbortSignal.timeout(timeoutMs)
+    const signal = exec.signal ? AbortSignal.any([exec.signal, deadline]) : deadline
+    const cwd = await cwdOf({agent:exec.agent,signal})
+    signal.throwIfAborted()
+    const files = kind !== 'review' && args.paths?.length
+      ? await gatherFiles(cwd, args.paths, Math.min(limits.maxContextChars, 12_000))
+      : ''
     let diff = ''
     if (kind === 'review') {
       const pasted = typeof args.diff === 'string' ? args.diff.trim() : ''
@@ -595,28 +628,30 @@ export function apply(ctx, config = {}) {
     }
     const prompt = buildPrompt(kind, args, {
       cwd,
-      branch: facts?.branch ?? undefined,
       date: new Date().toISOString().slice(0, 10),
       mode: resolved.sandbox === 'danger-full-access' ? 'full repository access' : 'text only, no shell',
-      facts,
       files,
       diff,
     })
+    signal.throwIfAborted()
     const result = await runner.consult({
       prompt,
       schema: SCHEMAS[kind],
       cwd,
-      effort: args.effort,
-      signal: exec.signal,
+      effort: args.effort ?? (resolved.reasoningEffort || 'low'),
+      timeoutMs,
+      signal,
       kind,
-      sessionKey: exec.agent ? String(exec.agent.id) : undefined,
+      sessionKey: 'advisor|' + scope.turnKey,
+      noRetry: true,
     })
     const parsed = parseAnswer(result.answer)
     if (parsed.ok === false) {
       throw new Error(`codex answered with non-JSON (${parsed.reason}); first 400 chars: ${result.answer.slice(0, 400)}`)
     }
     const value = assertResultShape(kind, parsed.value)
-    return { ...value, _meta: pickMeta(result) }
+    const meta = pickMeta(result)
+    return { ...value, _meta: { ...meta, consultationId: admission.consultationId, source: admission.source, reason, usageKnown: meta.inputTokens !== undefined && meta.outputTokens !== undefined } }
   }
 
   for (const [kind, task] of Object.entries(TASKS)) {
@@ -627,30 +662,56 @@ export function apply(ctx, config = {}) {
       output: {
         schema: outputSchema(kind),
         render: (_args, value) => text(`${RENDERERS[kind](value)}${footer(value?._meta)}`),
+        presentationMeta: (_args, value) => value._meta,
       },
       timeoutMs: resolved.timeoutMs + 30_000,
       async execute(args, exec) {
         const input = args && typeof args === 'object' ? args : {}
-        const agentSessionId = exec.agent ? String(exec.agent.id) : ''
-        if (agentSessionId !== '' && isInternalSessionId(agentSessionId)) {
-          throw new Error(
-            `${task.name}: this session was started by the reverse bridge (Codex → DSH). Consulting Codex again would recurse; do the work yourself and report the result.`,
-          )
+        if (isBridgeAgent(exec.agent?.id)) {
+          throw new Error('此任务由 Codex 发起。请在原 DSH 任务中继续实现或提交待答问题。')
         }
-        const required = kind === 'plan' ? 'task' : kind === 'answer' ? 'question' : kind === 'review' ? null : 'question'
-        if (required && (typeof input[required] !== 'string' || input[required].trim() === '')) {
-          throw new Error(`${task.name}: "${required}" is required and must be a non-empty string`)
-        }
-        if (kind === 'review' && (input.target ?? 'worktree') === 'files' && !(input.paths?.length > 0)) {
+        const focused = focusedAdvisorInput(input, limits)
+        const question = kind === 'plan' ? focused.task : kind === 'review' ? (focused.focus || '核对当前修改') : focused.question
+        if (!question) throw new Error('请提供一条明确的咨询问题或目标。')
+        if (kind === 'review' && focused.target === 'files' && !focused.paths?.length) {
           throw new Error('codex_review: target "files" needs at least one path')
         }
-        if (input.effort !== undefined && !['low', 'medium', 'high'].includes(input.effort)) {
+        if (focused.effort !== undefined && !['low', 'medium', 'high'].includes(focused.effort)) {
           throw new Error('effort must be one of: low, medium, high')
         }
-        return await run(kind, input, exec)
+        const scope = nativeAdvisorScope(agentRegistry, exec.agent)
+        if (!scope) throw new Error('无法确认当前 DSH 的用户回合。可以在 Codex 工作台打开「专家咨询」主动提问。')
+        const manual = scope.manualSeq !== null
+        if (!manual) {
+          if (resolved.advisorMode === 'manual' || kind === 'review') {
+            throw new Error(`需要用户明确发起。请让用户在新消息的第一行写 ${MANUAL_ADVISOR_MARKER}，随后写咨询问题。`)
+          }
+          const reasons = kind === 'plan' ? ['planning'] : ['decision', 'blocked']
+          if (!reasons.includes(input.reason) || !(focused.context || focused.paths?.length)) {
+            throw new Error('自动咨询需要触发原因和相关事实或文件。简单实现可由 DSH 自主完成。')
+          }
+        }
+        exec.signal?.throwIfAborted()
+        const reason = manual ? 'user-requested' : input.reason
+        const admission = reserveAdvisor(scope, { kind, reason, question, input: focused })
+        if (admission.replay) return { ...admission.replay, _meta: { ...admission.replay._meta, reused: true } }
+        let value
+        try {
+          value = await run(kind, focused, exec, scope, admission, reason)
+        } catch (cause) {
+          const code = typeof cause?.code === 'string' ? cause.code : 'consult-failed'
+          try { admission.finish('failed', { code }) } catch (error) { ctx.logger?.warn?.('codex-bridge: could not save failed consultation', error) }
+          throw new Error(`专家咨询未返回可用建议（${code}）。继续有证据支持的步骤，缺少实现决定时向用户说明阻塞。`, { cause })
+        }
+        try {
+          admission.finish('completed', value)
+        } catch (error) {
+          ctx.logger?.warn?.('codex-bridge: could not save consultation result', error)
+        }
+        return value
       },
     }
-    track(ctx.tools.register(definition))
+    track(ctx.tools.register(definition, { when: ({ agent }) => canIdentifyTurn && !isBridgeAgent(agent?.id) }))
   }
 
   // Diagnostics: tells us which host modules are actually live after a hot
@@ -706,7 +767,8 @@ export function apply(ctx, config = {}) {
       ctx.systemPrompt.section({
         name: 'codex-bridge/policy',
         order: 1000,
-        text: POLICY,
+        text: ({ agent }) => !canIdentifyTurn || isBridgeAgent(agent?.id) ? '' : resolved.advisorMode === 'auto' ? POLICY
+          : 'DSH owns implementation. Use the Codex advisor only when the latest human message begins with an @codex line.',
       }),
     )
   }

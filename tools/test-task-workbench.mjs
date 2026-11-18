@@ -18,8 +18,16 @@ fetch:async(url,options={})=>{
  const json=(value,status=200)=>({ok:status<400,json:async()=>value})
  if(!options.body)return json({ok:true,projects:[]})
  const body=JSON.parse(options.body);requests.push(body)
+ if(body.action==='consult'){
+   assert.equal(url,'/api/dsh-codex-bridge.v2.page')
+   return json({ok:true,kind:body.kind,value:{answer:'按旧快照验证'},meta:{inputTokens:12,outputTokens:7}})
+ }
  if(body.action==='list')return json({ok:true,value:{tasks:[task],nextCursor:null}})
- if(body.action==='get')return json({ok:true,value:task})
+ if(body.action==='get'){
+   if(body.taskId==='task-missing')return json({ok:false,error:'task-not-found'},404)
+   if(body.taskId==='task-outside-page')return json({ok:true,value:{...task,taskId:body.taskId,goal:'工作台翻页前也能打开'}})
+   return json({ok:true,value:task})
+ }
  if(body.action==='events')return json({ok:true,value:{events:[{seq:1,eventId:'e',at:1,type:'run.finished'}]}})
  if(body.action==='diagnose')return json({ok:true,value:{version:'2.0.0-rc.1',hostNode:'v24',store:{status:'healthy'},capabilities:{state:true,controlledVerification:false},liveAcceptance:'not-verified'}})
  if(body.action==='submit'){if(failSubmit){failSubmit=false;throw Error('connection lost')}return json({ok:true,value:task})}
@@ -67,7 +75,7 @@ button(tree,'诊断').props.onClick();await flush();tree=view();assert.ok(JSON.s
 task={...task,state:'WAITING_INPUT',run:{...task.run,question:{requestId:'latest-question',questions:[{id:'q',question:'选择继续方式',options:[{label:'继续'},{label:'停止'}]}]}}}
 button(tree,'刷新').props.onClick();await flush();tree=view();await flush();tree=view()
 walk(tree).find(n=>n.type==='input'&&n.props.type==='radio').props.onChange();tree=view()
-walk(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});await flush();tree=view()
+walk(tree).find(n=>n.type==='form'&&walk(n).some(n=>n.type==='button'&&n.children[0]==='回答并继续')).props.onSubmit({preventDefault(){}});await flush();tree=view()
 const answer=requests.find(r=>r.action==='answer');assert.equal(answer.requestId,'latest-question');assert.deepEqual(answer.answers[0].selected,['继续'])
 task={...sample,taskId:'workflow-parent',kind:'workflow',state:'WORKFLOW_PAUSED',run:{...sample.run,issue:{message:'alpha需要修复'}},workflow:{phase:'paused',parallelism:2,repairsUsed:0,maxRepairs:1,nodes:[{id:'alpha',goal:'修改A模块',state:'FAILED',childTaskId:'child-alpha',childState:'FAILED',dependsOn:[],writePaths:['src/a'],error:{message:'节点验证失败'}}]}}
 button(tree,'刷新').props.onClick();await flush();tree=view();await flush();tree=view()
@@ -79,4 +87,31 @@ assert.equal(button(tree,'修复节点 alpha').props.disabled,false,'uncertain a
 button(tree,'修复节点 alpha').props.onClick();await flush();tree=view()
 const nodeRepairs=requests.filter(r=>r.action==='repair_node');assert.equal(nodeRepairs.length,2);assert.equal(nodeRepairs[0].idempotencyKey,nodeRepairs[1].idempotencyKey);assert.equal(nodeRepairs[0].nodeId,'alpha')
 assert.ok(requests.filter(r=>r.action==='list').every(r=>r.rootsOnly===true))
+const lookup = async id => {
+  walk(tree).find(n=>n.type==='input'&&n.props.placeholder==='粘贴 Codex 回执里的 taskId').props.onChange({target:{value:id}})
+  tree=view()
+  walk(tree).find(n=>n.type==='form'&&walk(n).some(n=>n.type==='button'&&n.children[0]==='按编号打开')).props.onSubmit({preventDefault(){}})
+  await flush();tree=view()
+}
+await lookup('task-outside-page')
+assert.ok(JSON.stringify(tree).includes('工作台翻页前也能打开'))
+await lookup('task-missing')
+assert.ok(JSON.stringify(tree).includes('找不到这个任务编号'))
+assert.ok(JSON.stringify(tree).includes('工作台翻页前也能打开'),'a bad lookup must preserve the previously selected task')
+button(tree,'返回会话').props.onClick()
+tree=render(root.type)
+button(tree,'专家咨询').props.onClick()
+const advisor=render(root.type)
+const consultView=()=>render(advisor.type,advisor.props)
+tree=consultView()
+assert.equal(requests.filter(r=>r.action==='consult').length,0)
+walk(tree).find(n=>n.type==='textarea'&&n.props.required).props.onChange({target:{value:'旧规则应该怎么验证？'}})
+tree=consultView()
+const consult=walk(tree).find(n=>n.type==='form')
+consult.props.onSubmit({preventDefault(){}})
+consult.props.onSubmit({preventDefault(){}})
+await flush();tree=consultView()
+assert.equal(requests.filter(r=>r.action==='consult').length,1)
+assert.equal(requests.find(r=>r.action==='consult').prompt,'旧规则应该怎么验证？')
+assert.equal(walk(tree).find(n=>n.type.name==='ConsultResult').props.value.answer,'按旧快照验证')
 console.log('PASS: task workbench read-only mount, guarded review, Run history, idempotent uncertain submit, diagnostics and current-question answer.')

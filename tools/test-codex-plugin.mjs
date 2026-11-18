@@ -13,7 +13,7 @@ test('Codex root plugin is portable, async-first and cache-contained',async()=>{
   await mkdir(cache);await mkdir(home)
   for(const path of ['bin','lib','docs','package.json','.mcp.json','.codex-plugin','skills'])await cp(new URL('../'+path,import.meta.url),join(cache,path),{recursive:true})
   const market=JSON.parse(await readFile(new URL('../.agents/plugins/marketplace.json',import.meta.url),'utf8'));assert.equal(market.plugins[0].source.path,'.')
-  const plugin=JSON.parse(await readFile(join(cache,'.codex-plugin/plugin.json'),'utf8'));assert.equal(plugin.version,'0.8.0');assert.ok(plugin.interface.defaultPrompt.join().includes('dsh_task_submit'))
+  const plugin=JSON.parse(await readFile(join(cache,'.codex-plugin/plugin.json'),'utf8'));assert.equal(plugin.version,'0.9.0');assert.ok(plugin.interface.defaultPrompt.join().includes('dsh_task_submit'))
   const skill=await readFile(join(cache,'skills/dsh-execute/SKILL.md'),'utf8');assert.ok(skill.includes('dsh_task_wait'));assert.ok(skill.includes('不要默认用旧同步'));assert.ok(skill.split('\n').length<500)
   const config=JSON.parse(await readFile(join(cache,'.mcp.json'),'utf8')).mcpServers.dsh_bridge;assert.equal(config.command,'node');assert.equal(config.cwd,'.');assert.equal(config.default_tools_approval_mode,undefined)
   const env={...process.env,HOME:home,USERPROFILE:home,CODEX_HOME:home};for(const key of Object.keys(env))if(key.startsWith('DSH_BRIDGE_'))delete env[key]
@@ -26,10 +26,35 @@ test('Codex root plugin is portable, async-first and cache-contained',async()=>{
   const tools=(await rpc('tools/list',{})).result.tools;for(const name of ['dsh_task_submit','dsh_task_observe','dsh_task_wait','dsh_task_preview','dsh_task_orchestrate','dsh_task_repair_node'])assert.ok(tools.some(t=>t.name===name))
   assert.ok(tools.find(t=>t.name==='dsh_task_submit').inputSchema.properties.reasoningEffort)
   const missing=await call('dsh_status');assert.equal(missing.isError,true,'empty isolated home must not find real user DSH')
-  let requests=0
-  server=createServer((req,res)=>{requests++;assert.equal(req.headers.authorization,'Bearer isolated-test-only');res.setHeader('content-type','application/json');res.end(JSON.stringify({ok:true,pid:1,sessions:0,version:'test-fixture'}))});await new Promise(r=>server.listen(0,'127.0.0.1',r))
+  const requests = []
+  const task = { taskId:'task-fixture', activeRunId:'run-fixture', state:'QUEUED', run:{} }
+  server=createServer(async (req,res)=>{
+    assert.equal(req.headers.authorization,'Bearer isolated-test-only')
+    let data = ''
+    for await (const chunk of req) data += chunk
+    const input = data ? JSON.parse(data) : null
+    requests.push(input)
+    const reply = input
+      ? {ok:true,value:input.action==='await'?{reason:'terminal',task:{...task,state:'SUCCEEDED'}}:task}
+      : {ok:true,pid:1,sessions:0,version:'test-fixture'}
+    res.setHeader('content-type','application/json');res.end(JSON.stringify(reply))
+  });await new Promise(r=>server.listen(0,'127.0.0.1',r))
   const data=join(home,'.dsh/codex-bridge');await mkdir(data,{recursive:true});await writeFile(join(data,'http-token'),'isolated-test-only');await writeFile(join(data,'dsh-origin.json'),JSON.stringify({version:1,origin:'http://127.0.0.1:'+server.address().port}))
-  const healthy=await call('dsh_status');assert.notEqual(healthy.isError,true);assert.equal(requests,1);assert.ok(!stderr.includes('isolated-test-only'))
+  const healthy=await call('dsh_status');assert.notEqual(healthy.isError,true);assert.equal(requests.length,1);assert.ok(!stderr.includes('isolated-test-only'))
+  const submit = {goal:'implement',idempotencyKey:'fixture'}
+  const read = reply => JSON.parse(reply.content[0].text)
+  const receipt = read(await call('dsh_task_submit',submit))
+  assert.equal(receipt.taskId,task.taskId)
+  assert.deepEqual(receipt.handoff,{delivery:'background',workbench:'DSH → Codex → 任务 → 按编号打开',accepted:true,next:'return-receipt'})
+  assert.deepEqual(requests.slice(1),[{...submit,action:'submit'}],'a background handoff issues only the submit request')
+  const sameTask = read(await call('dsh_task_submit',{...submit,delivery:'conversation'}))
+  assert.equal(sameTask.handoff.next,'observe')
+  assert.deepEqual(requests[2],requests[1],'delivery preference must not change the underlying idempotent request')
+  const observed = read(await call('dsh_task_observe',{taskId:sameTask.taskId,runId:sameTask.activeRunId,observationMs:0}))
+  assert.equal(observed.task.state,'SUCCEEDED')
+  assert.equal(requests[3].action,'await')
+  assert.deepEqual(read(await call('dsh_task_submit',{...submit,detail:'full'})),task)
+  assert.equal(read(await call('dsh_task_orchestrate',{...submit,nodes:[]})).handoff.next,'return-receipt')
   lines.close();for(const p of pending.values())clearTimeout(p.timer)
  }finally{if(child&&child.exitCode===null){const end=new Promise(r=>child.once('exit',r));child.kill();await end}if(server){server.closeAllConnections();await new Promise(r=>server.close(r))}await rm(dir,{recursive:true,force:true})}
 })

@@ -1,11 +1,11 @@
 ---
 name: dsh-execute
-description: Delegate local file edits and commands to DeepSeek Harness through persistent tasks. Use for requested DSH execution, with optional one-time planning and review.
+description: Hand local implementation to DeepSeek Harness. Use for requested DSH execution, normally with a background receipt and optional one-time planning.
 ---
 
 # DSH 执行桥
 
-使用当前 `dsh_bridge` MCP 工具表，先以 `dsh_status` 核对宿主和用户政策，不读取或复制令牌。
+首次使用、连接异常或需要主动选模型时，调用 `dsh_status` 核对宿主和用户政策。沿用默认模型时可直接提交。
 
 ## 选择参与程度
 
@@ -31,11 +31,14 @@ description: Delegate local file edits and commands to DeepSeek Harness through 
 
 重启后先对账已有会话与原工作区，不重跑已派发任务。工作区会保留，不自动删除；不要重载在途任务。现有日志备份工具拒绝只备份含协作任务的日志，须离线保留整个workflows-v1目录、任务库及原仓库Git元数据，不能宣称仅有日志即可恢复。
 
-## 提交与等待
+## 交办回执与结果
 
 使用 `dsh_task_submit`，准备绝对 `cwd`、稳定的 `idempotencyKey`、简洁自包含的 `goal`，必要时附 `plan` 和 `acceptance`。目标、计划、验收要求合计最多20000字符，三者都会传给执行者。用户要求、必要实现和可选增强要分清，可选增强按用户选择加入。
 
-记录返回的 `taskId/activeRunId`，首选 **`dsh_task_observe`**，传同一 `taskId/runId`。默认总观察600000ms，MCP程序内每次HTTP最多等待55000ms；HTTP等待到期由程序续等，不交回模型。任务预算与观察窗口分开；完成、问题、审批、对账、Run变化、宿主关闭、连接错误或总观察到期才返回。
+- **后台交办是默认方式。** `delivery=background` 受理后，告诉用户当前状态、`taskId` 和回执里的工作台入口。用户可以在 **DSH → Codex → 任务 → 按编号打开** 看进度、回答问题和取结果。当前回合在回执处结束，用户后续问起时按编号单次查询。
+- **用户要求当前对话等结果时，用 `delivery=conversation`。** 如果回执已有终态，交付现有结果。如果还在执行，才用 `dsh_task_observe` 观察同一 `taskId/activeRunId`。协作任务使用父编号。默认总观察约十分钟，每次 HTTP 最多等待 55 秒，由程序续等。
+
+## 当前对话等待细节
 
 **有两层等待预算，必须都处理：** `.mcp.json` 的 `tool_timeout_sec=620` 只配置MCP调用；`functions.exec` 默认提前返回运行cell会再次唤醒模型，不能靠MCP设置消除。使用当前环境公开支持的外层等待参数，显式延长 `exec` 的 yield；若仍返回cell，后续 `functions.wait` 也显式延长，保留同一cell，不重新执行工具。支持以下参数的环境示例：
 

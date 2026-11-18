@@ -8,6 +8,7 @@
         maxConcurrency: 2
         sandbox: read-only
         promptPolicy: true
+        advisorMode: auto
         # v0.2: one long-lived codex app-server process per (agent, cwd) keeps the
         # strategist's context across consults. `exec` restores the v0.1 behaviour.
         sessionMode: app-server

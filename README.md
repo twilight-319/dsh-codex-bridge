@@ -1,12 +1,19 @@
 # Codex × DSH bridge 2.0 RC
 
-当前源码候选 **2.0.0-rc.5 / Codex 包装 0.8.0**：新增程序持续观察与视觉/实现交付要求，修复外层短等指引及无计划时验收条件不显示，见[等待与质量修复](docs/OBSERVATION_QUALITY.md)。上一轮rc.4增加父子任务依赖调度、最多两个DSH执行者、真实隔离worktree、统一预算和节点修复，以及内容冲突检测、统一集成与审查。见[大任务协作调度](docs/WORKFLOW_SCHEDULING.md)。尚未安装到当前运行环境或作为稳定版发布，真机及真实费用验收未完成，发布状态仍为NO-GO；下文rc.3及rc.2保留各轮背景。
+[双向协作产品规划](docs/PRODUCT_PLAN.md)说明如何在 Codex 中交办给 DSH、在 DSH 中按需咨询 Codex，以及下一版的开发顺序和验收方法。
+
+当前源码候选为 **2.0.0-rc.6 / Codex 插件 0.9.0**。Codex 默认交给 DSH 后台实现，在原对话返回任务编号。DSH 原生回合可以就一个关键决定咨询 Codex，咨询原因、用量和建议保留在记录中。真实账户的额度、质量和交付速度仍待对照验收。
+
+- **从 Codex 交办给 DSH。** 可以说“交给 DSH，后台执行”。在 **DSH → Codex → 任务 → 按编号打开** 粘贴回执中的任务编号。要在原对话接结果，可以说“交给 DSH，等它做完再告诉我”。
+- **从 DSH 咨询 Codex。** 普通任务由 DSH 自行实现，复杂任务可在开工前询问方案，也可以在遇到阻塞时问一次。主动咨询时在新消息的第一行写 `@codex`，下一行说明问题。工作台也有可由用户直接提交的 **专家咨询**。
+
+上一轮 RC 的实现见[等待与质量修复](docs/OBSERVATION_QUALITY.md)和[大任务协作调度](docs/WORKFLOW_SCHEDULING.md)。
 
 本地开发候选 **2.0.0-rc.3 / Codex 包装 0.6.0**：新增 direct/planned/reviewed 执行模式、完成/待处理长等待、默认精简 MCP 结果、DSH 事件用量和阶段耗时。说明与限制见[减少协调开销](docs/EFFICIENT_EXECUTION.md)。尚未发布、安装或完成真实额度对照验收；以下 rc.2 / 0.5.0 内容保留原发布背景，不能作为新候选已上线的证明。
 
 工程收尾候选 **2.0.0-rc.2**，发布仍为 **NO-GO，等待固定 RC 的真机复验**。新增任务工作台、只读 doctor、旧记录导入、备份恢复与发布证据检查。左侧 Codex → **任务** 即可进入。
 
-`main` 当前为 **2.0.0-rc.5 开发候选**，合并远端任务工作台/诊断/导入与本地长任务/维护/调优能力；不是正式 2.0.0 稳定发布。复验或安装时固定完整 40 位提交 SHA。原收尾开发记录见 [`feat/task-core-beta1` / PR #1](https://github.com/twilight-319/dsh-codex-bridge/pull/1)。升级前使用 maintenance begin 排空，不要重载在途任务，并按发布验收文档备份。
+复验或安装时固定完整 40 位提交 SHA。升级前使用 maintenance begin 排空在途任务，并按发布验收文档备份。原收尾开发记录见 [`feat/task-core-beta1` / PR #1](https://github.com/twilight-319/dsh-codex-bridge/pull/1)。
 
 - [2.0 使用 升级与发布验收](docs/V2_RELEASE.md)
 - [Beta 1 阻断与复验记录](docs/BETA1_RETEST.md)
@@ -20,7 +27,7 @@ Beta 1 候选实现，保留 1.x 三个 MCP 工具。新增持久化任务接口
 
 新增任务调优首版：授权1～2模型池、Codex分项模型/档位/预算选择、只读preview、提交冻结与四层审计、项目隔离历史预算建议。异步submit现支持reasoningEffort（含授权max）、provider/model及tuning；模型/档位冷启动使用明确用户标签，不假称已历史学习。参见[任务调优规格与用法](docs/TASK_TUNING.md)。
 
-在已提交修复 1593821 上增加长任务与维护保护：**复杂任务用异步submit（默认30分钟、可配上限2小时）+ wait短查询，不再用旧同步10分钟接口承接整项目**。wait超时或断线不取消后台；answer后台继续。更新前maintenance begin关闭新准入，忙时拒绝更新且不取消已有工作。详见[长任务与安全维护](docs/LONG_TASKS.md)。
+复杂任务用异步 submit，后台预算默认 30 分钟，可配上限 2 小时。需要在对话内交付时用 observe，观察断线后后台仍可继续。维护模式暂停接纳新任务，已有工作继续排空。[长任务与安全维护](docs/LONG_TASKS.md)
 
 旧 2.0.0-beta.1.2 修复说明：
 
@@ -31,6 +38,7 @@ Beta 1 候选实现，保留 1.x 三个 MCP 工具。新增持久化任务接口
 ## 任务接口
 
 - `dsh_task_submit`：`goal`、`idempotencyKey` 必填；可传 `cwd`、`plan`、`acceptance`、`verificationProfile`、`review`、`timeoutMs`。
+- Codex MCP 的 `dsh_task_submit` 和 `dsh_task_orchestrate` 支持 `delivery=background|conversation`。该偏好只影响摘要回执，使用同一提交参数和幂等键可找回任务。后台回执提供 `handoff.workbench`，同对话模式通过 `handoff.next` 指示观察或交付现有结果。
 - `dsh_task_get / list / events`：查询快照、分页列表、增量事件。`events` 使用全局 seq 游标。
 - `dsh_task_answer`：传 `taskId`、`runId`、当前 `requestId` 和 `answers`，继续同一个 Run。
 - `dsh_task_cancel`：取消明确的任务，已请求与确认停止分别记录。旧 `dsh_execute` 的 MCP 取消通知也会转发。
@@ -91,7 +99,8 @@ Codex 负责规划与决策，DeepSeek Harness（DSH）负责本机执行。零�
 - `dsh_execute`：默认新建会话，可用 `sessionId` 复用上下文；不同会话并发，同会话冲突明确拒绝、不排队。
 - `dsh_answer`：把 DSH 的问题交给 Codex 代理提问，支持连续问答，避免来回切软件。
 - 执行模型取实时 DSH 模型目录，支持跟随默认/固定模型，以及继承/固定/允许范围内自适应思考强度。
-- DSH 中通过 `codex_plan / codex_decide / codex_review / codex_ask` 咨询只读 Codex 参谋；桥接执行会话禁止反向递归。
+- DSH 原生回合的自动专家咨询共用一次机会。复杂拆解用 `codex_plan`，关键取舍或阻塞用 `codex_decide` 或 `codex_ask`。主动审查使用 `@codex` 发起的 `codex_review`。设置 `advisorMode: manual` 可只保留手动调用。宿主无法证明当前回合时，由工作台发起手动咨询。
+- 桥接执行会话中的阻塞由原任务记录和处理。原生咨询凭据存放在 `~/.dsh/codex-bridge/advisor-v1/`，默认记录原因、建议、运行状态和观测用量。设置 `logRuns: false` 时保留防重复发送所需的凭据。
 
 ## 前提
 
@@ -131,7 +140,7 @@ codex plugin add dsh-bridge@dsh-bridge
 codex plugin list
 ```
 
-然后完全退出并重新打开Codex App，先只调用`dsh_status`。Codex包装插件版本0.8.0，DSH源码候选为rc.5；详见[完整双端安装、升级与排错](docs/CODEX_INSTALL.md)。旧`dsh-bridge@personal`应确认后单独移除，避免重复服务器。
+然后完全退出并重新打开 Codex App，先只调用 `dsh_status`。本轮双端候选为 Codex 插件 0.9.0 和 DSH 桥 rc.6。旧 `dsh-bridge@personal` 应确认后单独移除，避免重复服务器。[双端安装、升级与排错](docs/CODEX_INSTALL.md)
 
 如果不用插件市场，也可手工在 Codex 的 MCP 设置中添加一个 stdio 服务器（此方式不自动提供技能，不要与上述插件同时注册同名服务器）：
 

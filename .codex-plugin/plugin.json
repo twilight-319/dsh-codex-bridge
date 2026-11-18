@@ -1,15 +1,15 @@
 {
   "name": "dsh-bridge",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Delegate local execution to DSH using persistent asynchronous tasks, policy-bounded model tuning and native-session evidence.",
   "author": { "name": "twilight-319" },
   "skills": "./skills/",
   "interface": {
     "displayName": "DSH 执行桥",
-    "shortDescription": "DSH 连续执行，按需规划与审查",
-    "longDescription": "连接本机 DeepSeek Harness。简单任务直接执行；大任务按依赖在独立 Git worktree 中运行最多两个执行者，共享预算，按需统一审查。长等待减少协调往返，用量按证据展示。使用者自行配置模型、权限和认证。",
+    "shortDescription": "Codex 交办，DSH 后台实现",
+    "longDescription": "把实现交给本机 DeepSeek Harness。Codex 按需给一次方案，DSH 负责实现和验证。默认返回任务回执，可在 DSH 工作台查看，也支持在当前对话等待交付。",
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
-    "defaultPrompt": ["先检查dsh_status；简单任务用dsh_task_submit，大任务仅在拆分有收益时由Codex一次规划，用dsh_task_orchestrate提交依赖和修改范围。最多两个DSH执行者在隔离worktree中运行，共享父预算，失败只修复节点。使用父taskId调用dsh_task_observe，由程序持续等待；经functions.exec时显式设置长yield，外层等待不可省略。视觉任务保留一次性制作说明与qualityProfile，交付要求和测试分开，不默认额外审查或扩展需求。"]
+    "defaultPrompt": ["用 dsh_task_submit 交办，简单任务 direct，有关键决定时 planned。独立分工有收益时用 dsh_task_orchestrate。默认后台交办，回报已受理、taskId 和 DSH → Codex → 任务 → 按编号打开，然后结束当前回合。用户明确要求等结果时用 delivery=conversation 和 dsh_task_observe。首次使用或需要选模型时用 dsh_status 核对宿主和政策。"]
   }
 }

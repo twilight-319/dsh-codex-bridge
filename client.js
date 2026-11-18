@@ -309,12 +309,13 @@ window.__ModuleLoader__.load({
     function jget() {
       return fetch(API, { credentials: 'same-origin', cache: 'no-store' }).then(asJson)
     }
-    function jpost(body) {
+    function jpost(body, signal) {
       return fetch(API, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body || {}),
+        signal: signal,
       }).then(asJson)
     }
 
@@ -445,9 +446,9 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'cb-result-head' },
-          h('span', { className: 'cb-result-title' }, 'Codex 回话'),
+          h('span', { className: 'cb-result-title' }, 'Codex 建议'),
           h(Chip, { cls: 'cb-chip-brand' }, km.label),
-          h('span', { className: 'cb-result-meta' }, (meta.model || 'native') + ' · ' + mode.label + ' · ' + fmtDuration(meta.elapsedMs) + ' · ' + fmtTokens(meta.inputTokens) + ' in / ' + fmtTokens(meta.outputTokens) + ' out'),
+          h('span', { className: 'cb-result-meta' }, (meta.model || 'native') + ' · ' + mode.label + ' · ' + fmtDuration(meta.elapsedMs) + ' · 输入 ' + (meta.inputTokens ?? '未知') + ' / 缓存命中 ' + (meta.cachedInputTokens ?? '未知') + ' / 输出 ' + (meta.outputTokens ?? '未知') + ' token'),
         ),
         body,
       )
@@ -1418,16 +1419,19 @@ window.__ModuleLoader__.load({
       var formState = useState(false), showForm = formState[0], setShowForm = formState[1]
       var draftState = useState({goal:'',cwd:'',plan:'',acceptance:'',seconds:'',executionMode:'direct',qualityProfile:'',verificationProfile:'',provider:'',model:'',reasoningEffort:'',reason:'',taskClass:'',objective:'balanced',autoModel:false,autoEffort:false,autoTimeout:false}), draft = draftState[0], setDraft = draftState[1]
       var filterState = useState(''), filter = filterState[0], setFilter = filterState[1]
+      var lookupState = useState(''), lookupId = lookupState[0], setLookupId = lookupState[1]
+      var lookupStatusState = useState(''), lookupStatus = lookupStatusState[0], setLookupStatus = lookupStatusState[1]
       var pageState = useState(0), pageCursor = pageState[0], setPageCursor = pageState[1]
       var historyState = useState(''), historyId = historyState[0], setHistoryId = historyState[1]
       var answersState = useState({}), answers = answersState[0], setAnswers = answersState[1]
       var acceptState = useState(false), accepted = acceptState[0], setAccepted = acceptState[1]
       var selected = React.useRef(''), alive = React.useRef(true), generation = React.useRef(0), submissionKey = React.useRef(''), retryKeys = React.useRef({}), eventCursor = React.useRef(0)
+      var lookupGeneration = React.useRef(0)
       var labels = {QUEUED:'排队中',RUNNING:'执行中',VERIFYING:'验证中',WAITING_INPUT:'等待回答',WAITING_APPROVAL:'等待原生审批',WORKFLOW_PAUSED:'协作已暂停',CANCEL_REQUESTED:'正在确认停止',RECONCILING:'等待对账',REVIEW_REQUIRED:'待人工核对',SUCCEEDED:'验收通过',FAILED:'失败',CANCELLED:'已取消',LEGACY:'旧版只读记录',PENDING:'等待依赖',PREPARING:'准备隔离工作区',SUBMITTING:'提交中',ADMITTED:'已接纳',COMPLETED:'节点完成',REPAIRING:'修复中'}
       function request(action, input) {
         var controller = new AbortController(), timer = setTimeout(function(){controller.abort()},25000)
         return fetch('/api/dsh-codex-bridge.v2.task-workbench',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'content-type':'application/json'},body:JSON.stringify(Object.assign({},input||{},{action:action})),signal:controller.signal})
-          .then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.message||body.error||'请求失败');return body.value})})
+          .then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw Object.assign(new Error(body.message||body.error||'请求失败'),{code:body.error});return body.value})})
           .finally(function(){clearTimeout(timer)})
       }
       function load() {
@@ -1439,7 +1443,23 @@ window.__ModuleLoader__.load({
       useEffect(function(){alive.current=true;load();var timer=setInterval(load,5000);return function(){alive.current=false;generation.current++;clearInterval(timer)}},[pageCursor])
       useEffect(function(){setAnswers({})},[task&&task.activeRunId,task&&task.run&&task.run.question&&task.run.question.requestId])
       useEffect(function(){setAccepted(false)},[task&&task.revision,task&&task.run&&task.run.evidenceHash])
-      function choose(id){selected.current=id;eventCursor.current=0;setEvents([]);setHistoryId('');setAccepted(false);setTask(null);load()}
+      function choose(id, snapshot) {
+        lookupGeneration.current++
+        setLookupStatus('')
+        selected.current=id;eventCursor.current=0;setEvents([]);setHistoryId('');setAccepted(false);setTask(snapshot||null);load()
+      }
+      function lookup(event) {
+        event.preventDefault()
+        var id = lookupId.trim()
+        if(!id)return
+        var ticket = ++lookupGeneration.current
+        setLookupStatus('正在打开任务…')
+        request('get',{taskId:id}).then(function(found){
+          if(alive.current&&ticket===lookupGeneration.current)choose(id,found)
+        }).catch(function(cause){
+          if(alive.current&&ticket===lookupGeneration.current)setLookupStatus(cause.code==='task-not-found'?'找不到这个任务编号。':cause.message)
+        })
+      }
       function operate(action,input) {
         var retryKey=input.taskId+(action==='repair_node'?'/'+input.nodeId:'')
         if(action==='retry'||action==='repair_node'){
@@ -1517,6 +1537,7 @@ window.__ModuleLoader__.load({
         question.questions.map(function(q){return h('fieldset',{key:q.id},h('legend',null,q.question),(q.options||[]).map(function(option){var chosen=answers[q.id]&&answers[q.id].selected||[];return h('label',{key:option.label,className:'cbt-check'},h('input',{type:q.multiSelect?'checkbox':'radio',name:question.requestId+q.id,checked:chosen.includes(option.label),onChange:function(){var next=Object.assign({},answers);next[q.id]=Object.assign({},next[q.id],{selected:q.multiSelect?(chosen.includes(option.label)?chosen.filter(function(v){return v!==option.label}):chosen.concat(option.label)):[option.label]});setAnswers(next)}}),option.label)}),h('label',null,'补充回答',h('input',{value:answers[q.id]&&answers[q.id].custom||'',onChange:function(e){var next=Object.assign({},answers);next[q.id]=Object.assign({},next[q.id],{custom:e.target.value});setAnswers(next)}})))}),h('button',{className:'cbt-button primary',type:'submit',disabled:busy},'回答并继续')):null
       var body=task?h('article',{className:'cbt-detail'},h('div',{className:'cbt-row'},h('h2',null,task.goal),h('span',{className:'cbt-status'},labels[task.state]||task.state)),
         h('p',{className:'cbt-muted'},task.cwd),h('p',{className:'cbt-muted'},task.taskId),
+        task.state==='WAITING_INPUT'?h('p',{className:'cbt-notice'},'DSH 等待你的回答。提交下方回答后，原任务继续运行。'):null,
         task.legacy?h('p',{className:'cbt-notice'},'旧版只读快照：未记录 Run 和验收证据，不可从此记录重试。'):null,
         h('div',{className:'cbt-row'},button('打开原生会话',openSession,!task.run.sessionId),editable&&!terminalTask?button('请求取消',function(){operate('cancel',{taskId:task.taskId})},busy):null,
           editable&&['RECONCILING','WAITING_APPROVAL','CANCEL_REQUESTED'].includes(task.state)?button('对账 / 补发取消',function(){operate('reconcile',{taskId:task.taskId})},busy):null,
@@ -1538,21 +1559,56 @@ window.__ModuleLoader__.load({
           h('p',null,'执行模式：'+(modeLabels[task.executionMode]||(task.review?modeLabels.reviewed:task.plan?modeLabels.planned:modeLabels.direct))),
           h('p',null,'DSH：未缓存输入 '+metric(run.usage&&run.usage.inputTokens)+' · 缓存读取 '+metric(run.usage&&run.usage.cacheReadTokens)+' · 输出 '+metric(run.usage&&run.usage.outputTokens)+' token'),
           h('p',{className:'cbt-muted'},'用量完整性：'+(run.usage&&run.usage.status||'unknown')+'；实际费用未知。Codex 外部规划和协调用量未接入，不能按 token 推算订阅额度。'),
-          h('p',null,'排队 '+seconds(run.timing&&run.timing.queueMs)+' · 执行 '+seconds(run.timing&&run.timing.executionMs)+' · 验证 '+seconds(run.timing&&run.timing.verificationMs)+' · 审查 '+seconds(run.timing&&run.timing.reviewMs)+' · 总耗时 '+seconds(run.timing&&run.timing.totalMs)),
+          h('p',null,'排队 '+seconds(run.timing&&run.timing.queueMs)+' · 执行 '+seconds(run.timing&&run.timing.executionMs)+' · 人工等待 '+seconds(run.timing&&run.timing.humanWaitingMs)+' · 验证 '+seconds(run.timing&&run.timing.verificationMs)+' · 审查 '+seconds(run.timing&&run.timing.reviewMs)+' · 总耗时 '+seconds(run.timing&&run.timing.totalMs)),
           run.coordination?h('p',null,'等待调用：长等待 '+metric(run.coordination.awaitCalls)+' 次 · 短等待 '+metric(run.coordination.waitCalls)+' 次（当前宿主统计，随任务变化保存）'):null,
           run.review&&run.review.usage?h('details',null,h('summary',null,'本次 Codex 审查用量'),h('pre',null,JSON.stringify(run.review.usage,null,2))):null),
         run.review?h('p',null,'Codex 审查：'+run.review.verdict+' · '+(run.review.summary||'')):null,
         questionForm,
         editable&&task.state==='REVIEW_REQUIRED'?h('section',{className:'cbt-form'},h('h3',null,'人工验收'),h('label',{className:'cbt-check'},h('input',{type:'checkbox',checked:accepted,onChange:function(e){setAccepted(e.target.checked)}}),'我已核对当前 Run 的产物和验收证据'),button('接受当前结果',function(){operate('review',{taskId:task.taskId,runId:task.activeRunId,expectedRevision:task.revision,evidenceHash:run.evidenceHash,decision:'accept'})},busy||!accepted),button('要求修改',function(){operate('review',{taskId:task.taskId,runId:task.activeRunId,expectedRevision:task.revision,evidenceHash:run.evidenceHash,decision:'changes_requested'})},busy)):null,
         h('details',null,h('summary',null,'事件时间线 · '+events.length+' 项'),button('读取后续事件',load,busy),h('ol',null,events.map(function(item){return h('li',{key:item.eventId},new Date(item.at).toLocaleString()+' · '+item.type)})))):h('div',{className:'cbt-empty'},'选择任务查看运行记录、问题和验收证据。')
+      var lookupForm = h('form',{onSubmit:lookup},
+        h('label',null,'任务编号',h('input',{type:'text',value:lookupId,maxLength:200,placeholder:'粘贴 Codex 回执里的 taskId',onChange:function(e){lookupGeneration.current++;setLookupId(e.target.value);setLookupStatus('')}})),
+        h('button',{type:'submit',className:'cbt-button',disabled:!lookupId.trim()},'按编号打开'),
+        lookupStatus?h('p',{role:'status',className:'cbt-muted'},lookupStatus):null)
       return h('section',{className:'cbt','aria-label':'任务工作台'},h('header',{className:'cbt-toolbar'},button('返回会话',props.onBack,false),h('h1',null,'任务工作台'),button('新建任务',function(){setShowForm(!showForm)},busy,{'aria-expanded':showForm}),button('刷新',load,busy),button('诊断',diagnose,busy),button('导入旧记录',function(){if(window.confirm('将旧台账导入为只读快照，不重跑任务。请先结束活动任务。'))operate('importLegacy',{})},busy)),
         error?h('p',{className:'cbt-error',role:'alert'},error):null,
         diagnostics?h('section',{className:'cbt-diagnostics'},h('h2',null,'诊断'),h('p',null,'版本 '+diagnostics.version+' · 宿主 Node '+diagnostics.hostNode+' · 任务库 '+diagnostics.store.status),h('p',null,'真机验收：'+diagnostics.liveAcceptance),h('ul',null,Object.keys(diagnostics.capabilities).map(function(key){return h('li',{key:key},key+'：'+(diagnostics.capabilities[key]?'可用':'不可用 / 未确认'))}))):null,
-        form,h('div',{className:'cbt-grid'},h('aside',{className:'cbt-list'},h('label',null,'筛选本页任务',h('input',{type:'search',value:filter,onChange:function(e){setFilter(e.target.value)}})),visible.length?visible.map(function(item){return h('button',{key:item.taskId,type:'button',className:'cbt-task'+(selected.current===item.taskId?' selected':''),'aria-pressed':selected.current===item.taskId,onClick:function(){choose(item.taskId)}},h('strong',null,item.goal),h('span',null,labels[item.state]||item.state),h('small',null,item.cwd))}):h('p',null,'本页没有匹配任务'),h('div',{className:'cbt-row'},button('上一页',function(){setPageCursor(Math.max(0,pageCursor-50))},pageCursor===0),button('下一页',function(){setPageCursor(listing.nextCursor)},listing.nextCursor===null))),body))
+        form,h('div',{className:'cbt-grid'},h('aside',{className:'cbt-list'},lookupForm,h('label',null,'筛选本页任务',h('input',{type:'search',value:filter,onChange:function(e){setFilter(e.target.value)}})),visible.length?visible.map(function(item){return h('button',{key:item.taskId,type:'button',className:'cbt-task'+(selected.current===item.taskId?' selected':''),'aria-pressed':selected.current===item.taskId,onClick:function(){choose(item.taskId)}},h('strong',null,item.goal),h('span',null,labels[item.state]||item.state),h('small',null,item.cwd))}):h('p',null,'本页没有匹配任务'),h('div',{className:'cbt-row'},button('上一页',function(){setPageCursor(Math.max(0,pageCursor-50))},pageCursor===0),button('下一页',function(){setPageCursor(listing.nextCursor)},listing.nextCursor===null))),body))
+    }
+
+    function AdvisorConsultation(props) {
+      var kindState = useState('ask'), kind = kindState[0], setKind = kindState[1]
+      var promptState = useState(''), prompt = promptState[0], setPrompt = promptState[1]
+      var contextState = useState(''), context = contextState[0], setContext = contextState[1]
+      var resultState = useState(null), result = resultState[0], setResult = resultState[1]
+      var statusState = useState(''), status = statusState[0], setStatus = statusState[1]
+      var busyState = useState(false), busy = busyState[0], setBusy = busyState[1]
+      var active = React.useRef(null)
+      useEffect(function(){return function(){if(active.current)active.current.abort()}},[])
+      function consult(event) {
+        event.preventDefault()
+        if(active.current||!prompt.trim())return
+        var controller = new AbortController()
+        active.current = controller
+        setBusy(true);setStatus('');setResult(null)
+        jpost({action:'consult',kind:kind,prompt:prompt.trim(),context:context.trim()},controller.signal)
+          .then(function(value){if(!controller.signal.aborted)setResult(value)})
+          .catch(function(cause){if(!controller.signal.aborted)setStatus(cause.message)})
+          .finally(function(){if(!controller.signal.aborted){active.current=null;setBusy(false)}})
+      }
+      return h('section',{className:'cbt','aria-label':'专家咨询'},
+        h('header',{className:'cbt-toolbar'},h('button',{className:'cbt-button',type:'button',onClick:props.onBack},'返回会话'),h('h1',null,'专家咨询')),
+        h('form',{className:'cbt-form',onSubmit:consult},
+          h('label',null,'咨询类型',h('select',{value:kind,disabled:busy,onChange:function(e){setKind(e.target.value)}},h('option',{value:'ask'},'问一个具体问题'),h('option',{value:'plan'},'梳理实现步骤'),h('option',{value:'decide'},'请专家做取舍'))),
+          h('label',null,'希望专家解决的问题',h('textarea',{value:prompt,required:true,maxLength:2000,disabled:busy,onChange:function(e){setPrompt(e.target.value)}})),
+          h('label',null,'相关事实与约束',h('textarea',{value:context,maxLength:4000,disabled:busy,onChange:function(e){setContext(e.target.value)}})),
+          h('button',{className:'cbt-button primary',type:'submit',disabled:busy||!prompt.trim()},busy?'正在咨询…':'咨询 Codex')),
+        status?h('p',{className:'cbt-error',role:'alert'},status):null,
+        result?h(ConsultResult,{kind:result.kind,value:result.value,meta:result.meta}):null)
     }
 
     function BridgeWorkbench() {
-      var workspaceState = useState(false), tasksVisible = workspaceState[0], setTasksVisible = workspaceState[1]
+      var workspaceState = useState(''), workspace = workspaceState[0], setWorkspace = workspaceState[1]
       var codexState = useState(null), codex = codexState[0], setCodex = codexState[1]
       var ledgerState = useState(null), ledger = ledgerState[0], setLedger = ledgerState[1]
       var selState = useState({ kind: bridgeUI.kind, id: bridgeUI.id }), sel = selState[0], setSel = selState[1]
@@ -1960,14 +2016,16 @@ window.__ModuleLoader__.load({
           h('span', { style: { opacity: .5 } }, '/'),
           h('b', null, sel.kind === 'thread' ? ((selectedThreadInfo && selectedThreadInfo.name) || 'Codex 会话') : (selectedExecution ? bwkTaskOf(selectedExecution) : '请选择会话'))),
         h('div', { className: 'bwk-actions' },
-          h('button', {type:'button',className:'bwk-btn small',onClick:function(){setTasksVisible(true)}},'任务'),
+          h('button', {type:'button',className:'bwk-btn small',onClick:function(){setWorkspace('tasks')}},'任务'),
+          h('button', {type:'button',className:'bwk-btn small',onClick:function(){setWorkspace('advisor')}},'专家咨询'),
           error ? h('span', { className: 'bwk-status err' }, '有错误') : null,
           h('button', { type: 'button', className: 'bwk-btn small', 'aria-pressed': inspector, title: inspector ? '收起右侧详情' : '打开右侧详情', onClick: function () { bridgeUI.inspector = !inspector; setInspector(!inspector) } },
             bwkIcon('panel'), inspector ? '收起' : '详情'),
           h('button', { type: 'button', className: 'bwk-btn small', disabled: threadBusy, title: '刷新数据', onClick: function () { load() } }, bwkIcon('refresh'), threadBusy ? '刷新中' : '刷新'),
           h('button', { type: 'button', className: 'bwk-btn small', title: '执行模型与思考强度', onClick: function () { bridgeUI.settings = true; setSettings(true) } }, bwkIcon('settings'), '执行模型')))
 
-      if(tasksVisible) return h(TaskWorkbench,{onBack:function(){setTasksVisible(false)}})
+      if(workspace==='tasks') return h(TaskWorkbench,{onBack:function(){setWorkspace('')}})
+      if(workspace==='advisor') return h(AdvisorConsultation,{onBack:function(){setWorkspace('')}})
       return h('div', { className: 'bwk' + (inspector ? '' : ' no-inspector') },
         tree,
         h('main', { className: 'bwk-main' },
